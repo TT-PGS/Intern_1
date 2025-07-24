@@ -206,3 +206,6 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+simple_test.py
+RL_base.py
+reward_plot.png
