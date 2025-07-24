@@ -33,54 +33,51 @@ class SimpleSplitSchedulingEnv(gym.Env):
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, dict]:
         job_id = action // self.num_machines
         machine_id = action % self.num_machines
-        print(f"++++++++++++ Action {action} taken: Job {job_id} on Machine {machine_id}")
+        print(f"Action {action} taken: Job {job_id} on Machine {machine_id}")
 
         if self.done or self.jobs_remaining[job_id] <= 0:
             return self._get_state(), -1.0, self.done, {}
 
-        if job_id not in self.job_assignments:
-            self.job_assignments[job_id] = {}
+        self.job_assignments.setdefault(job_id, {})
 
         # Get valid time windows for this machine
         available_windows = self.time_windows[machine_id]
-        print(f"Available time windows for Machine {machine_id}: {available_windows}")
+        # print(f"Available time windows for Machine {machine_id}: {available_windows}")
         job_remaining = self.jobs_remaining[job_id]
-        print(f"Job {job_id} remaining time: {job_remaining}")
+        # print(f"Job {job_id} remaining time: {job_remaining}")
         scheduled = False
 
         # for window_start, window_end in available_windows:
         for window in available_windows:
-            print(f"Checking window: {window}")
+            # print(f"Checking window: {window}")
             window_start, window_end = window
             window_length = window_end - window_start
-            print(f"Windows start: {window_start}, end: {window_end}, length: {window_length}")
+            # print(f"Windows start: {window_start}, end: {window_end}, length: {window_length}")
             if window_length < self.split_min:
-                print(f"Window length {window_length} is less than split_min {self.split_min}, skipping")
+                # print(f"Window length {window_length} is less than split_min {self.split_min}, skipping")
                 continue
 
             new_job_remaining = job_remaining - window_length
-            print(f"New job remaining after scheduling of job {job_id}: {new_job_remaining}")
+            # print(f"New job remaining after scheduling of job {job_id}: {new_job_remaining}")
+
+            if new_job_remaining < self.split_min and new_job_remaining > 0:
+                # print(f"New job remaining {new_job_remaining} is less than split_min {self.split_min}, cannot split like that skipping")
+                continue
 
             if new_job_remaining > 0:
                 self.jobs_remaining[job_id] = new_job_remaining
                 job_remaining = new_job_remaining
                 window[0] = window[1]
-                if machine_id not in self.job_assignments[job_id]:
-                    self.job_assignments[job_id].setdefault(machine_id, []).append((window_start, window_end))
-                else:
-                    self.job_assignments[job_id][machine_id].append((window_start, window_end))
+                self.job_assignments[job_id].setdefault(machine_id, []).append((window_start, window_end))
+                self.machines[machine_id] = window_end
             else:
-                print(f"Job {job_id} scheduled on Machine {machine_id} from {window_start} to {window_start + job_remaining}")
+                # print(f"Job {job_id} scheduled on Machine {machine_id} from {window_start} to {window_start + job_remaining}")
                 self.jobs_remaining[job_id] = 0
                 new_window_start = window_start + job_remaining
                 job_remaining = 0
                 window[0] = new_window_start
-
-                if machine_id not in self.job_assignments[job_id]:
-                    self.job_assignments[job_id].setdefault(machine_id, []).append((window_start, new_window_start))
-                else:
-                    self.job_assignments[job_id][machine_id].append((window_start, new_window_start))
-
+                self.job_assignments[job_id].setdefault(machine_id, []).append((window_start, new_window_start))
+                self.machines[machine_id] = new_window_start
                 scheduled = True
                 break
 
@@ -90,6 +87,7 @@ class SimpleSplitSchedulingEnv(gym.Env):
         if all(j <= 0 for j in self.jobs_remaining):
             self.done = True
             makespan = max(self.machines)
+            print(f"All jobs completed. Makespan: {makespan}")
             reward = -makespan
         else:
             reward = 0.0
