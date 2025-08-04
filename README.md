@@ -19,14 +19,17 @@ Intern_1/
 │
 ├── agents/                         # 🤖 Các agent cụ thể kế thừa từ AgentBase
 │   ├── random_agent.py             # Agent chọn action ngẫu nhiên
-│   ├── q_learning_agent.py         # Q-Learning Agent
-│   └── agent_factory.py            # AgentFactory để load agent qua tên
+│   ├── dqn_agent.py                # 🤖 Định nghĩa DQNAgent
+│   ├── q_net.py                    # 🧠 Định nghĩa mạng nơ-ron Q-Network
+│   ├── replay_buffer.py            # 📦 Replay buffer (experience replay)
+│   ├── train_dqn.py                # 🎓 Huấn luyện DQNAgent qua nhiều tập
+│   └── agent_factory.py            # AgentFactory để load agent qua tên ( hiện tại: "dqn", "random")
 │
 ├── envs/                           # 🌍 Môi trường RL cụ thể (có thể theo chuẩn gym)
 │   └── simple_split_env.py         # SimpleSplitSchedulingEnv
 │
 ├── configs/                        # ⚙️ Các file config YAML/JSON để cấu hình model
-│   └── default_model.yaml          # Config cho số job, máy, size...
+│   └── splittable_jobs.json        # Config cho số job, máy, size theo định dạng json
 │
 ├── metrics/                        # 📈 Đánh giá kết quả (makespan, fairness...)
 │   └── evaluator.py                # Tính metrics từ lịch/schedule

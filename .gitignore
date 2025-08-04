@@ -209,3 +209,4 @@ __marimo__/
 simple_test.py
 RL_base.py
 reward_plot.png
+qnet.pt
