@@ -1,7 +1,8 @@
+# envs/simple_split_env.py
+
 import gym
 import numpy as np
 from typing import Tuple
-
 from base.model import SchedulingModel
 
 class SimpleSplitSchedulingEnv(gym.Env):
@@ -11,7 +12,6 @@ class SimpleSplitSchedulingEnv(gym.Env):
         self.num_jobs = model.num_jobs
         self.num_machines = model.num_machines
         self.processing_times = model.processing_times
-        self.split_min = model.split_min
         self.time_windows = model.time_windows  # Dict[int, List[List[int]]]
 
         self.jobs_remaining = []
@@ -38,61 +38,31 @@ class SimpleSplitSchedulingEnv(gym.Env):
         if self.done or self.jobs_remaining[job_id] <= 0:
             return self._get_state(), -1.0, self.done, {}
 
+        job_duration = self.jobs_remaining[job_id]
+        start_time = max(self.machines[machine_id], self._earliest_available(machine_id))
+        end_time = start_time + job_duration
+
         self.job_assignments.setdefault(job_id, {})
+        self.job_assignments[job_id].setdefault(machine_id, []).append((start_time, end_time))
 
-        # Get valid time windows for this machine
-        available_windows = self.time_windows[machine_id]
-        # print(f"Available time windows for Machine {machine_id}: {available_windows}")
-        job_remaining = self.jobs_remaining[job_id]
-        # print(f"Job {job_id} remaining time: {job_remaining}")
-        scheduled = False
-
-        # for window_start, window_end in available_windows:
-        for window in available_windows:
-            # print(f"Checking window: {window}")
-            window_start, window_end = window
-            window_length = window_end - window_start
-            # print(f"Windows start: {window_start}, end: {window_end}, length: {window_length}")
-            if window_length < self.split_min:
-                # print(f"Window length {window_length} is less than split_min {self.split_min}, skipping")
-                continue
-
-            new_job_remaining = job_remaining - window_length
-            # print(f"New job remaining after scheduling of job {job_id}: {new_job_remaining}")
-
-            if new_job_remaining < self.split_min and new_job_remaining > 0:
-                # print(f"New job remaining {new_job_remaining} is less than split_min {self.split_min}, cannot split like that skipping")
-                continue
-
-            if new_job_remaining > 0:
-                self.jobs_remaining[job_id] = new_job_remaining
-                job_remaining = new_job_remaining
-                window[0] = window[1]
-                self.job_assignments[job_id].setdefault(machine_id, []).append((window_start, window_end))
-                self.machines[machine_id] = window_end
-            else:
-                # print(f"Job {job_id} scheduled on Machine {machine_id} from {window_start} to {window_start + job_remaining}")
-                self.jobs_remaining[job_id] = 0
-                new_window_start = window_start + job_remaining
-                job_remaining = 0
-                window[0] = new_window_start
-                self.job_assignments[job_id].setdefault(machine_id, []).append((window_start, new_window_start))
-                self.machines[machine_id] = new_window_start
-                scheduled = True
-                break
-
-        if not scheduled:
-            return self._get_state(), -5.0, self.done, {}
+        self.jobs_remaining[job_id] = 0
+        self.machines[machine_id] = end_time
 
         if all(j <= 0 for j in self.jobs_remaining):
             self.done = True
             makespan = max(self.machines)
-            print(f"All jobs completed. Makespan: {makespan}")
             reward = -makespan
         else:
             reward = 0.0
 
         return self._get_state(), reward, self.done, {}
+
+    def _earliest_available(self, machine_id: int) -> int:
+        windows = self.time_windows[machine_id]
+        for window_start, window_end in windows:
+            if window_end - window_start > 0:
+                return window_start
+        return 0
 
     def _get_state(self) -> np.ndarray:
         return np.array(self.jobs_remaining + self.machines, dtype=np.float32)
@@ -102,3 +72,18 @@ class SimpleSplitSchedulingEnv(gym.Env):
 
     def action_space_sample(self) -> int:
         return self.action_space.sample()
+
+    def state_dim(self) -> int:
+        return self.num_jobs + self.num_machines
+
+    def action_dim(self) -> int:
+        return 2  # job_id and machine_id as vector form for DQN agent
+
+    def valid_action_vectors(self):
+        actions = []
+        for job_id, remaining in enumerate(self.jobs_remaining):
+            if remaining <= 0:
+                continue
+            for machine_id in range(self.num_machines):
+                actions.append([job_id, machine_id])
+        return actions

@@ -1,12 +1,3 @@
-# class SchedulingModel:
-#     def __init__(self, num_jobs, num_machines, max_job_size):
-#         self.num_jobs = num_jobs
-#         self.num_machines = num_machines
-#         self.max_job_size = max_job_size
-
-#     def describe(self):
-#         return f"{self.num_jobs} jobs, {self.num_machines} machines, max size {self.max_job_size}"
-
 from typing import List, Dict
 
 class SchedulingModel:
@@ -23,6 +14,12 @@ class SchedulingModel:
         self.processing_times = processing_times  # pi
         self.split_min = split_min
         self.time_windows = time_windows          # bj,t và bj,t+1
+
+    def get_job_size(self, job_id: int) -> int:
+        return self.processing_times[job_id]
+
+    def get_machine_windows(self, machine_id: int) -> list:
+        return self.time_windows.get(machine_id, [])
 
     def describe(self):
         return {
