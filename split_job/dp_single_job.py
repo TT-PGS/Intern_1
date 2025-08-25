@@ -1,12 +1,15 @@
 import json
 import os
 from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional
 
 def get_windows_from_config(config: Dict[str, Any], machine_id: str) -> List[List[int]]:
     """Lấy danh sách time windows [[start,end],...] của 1 máy từ config."""
     return config["model"]["time_windows"].get(machine_id, [])
 
-from typing import List, Tuple, Optional
+def get_all_windows_from_config(config: Dict[str, Any]) -> List[List[List[int]]]:
+    """Lấy danh sách time windows [[start,end],...] của tất cả các máy từ config."""
+    return [get_windows_from_config(config, str(m)) for m in range(config["model"]["num_machines"])]
 
 def solve_min_timespan_cfg(
     total_processing_time: int,

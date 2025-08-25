@@ -1,268 +1,246 @@
 # staticAlgos/SA.py
+"""
+Simulated Annealing for Splittable Job Scheduling (DP per job).
+
+- Tối ưu: thứ tự phục vụ job (FCFS theo thứ tự này).
+- Decode lịch: với mỗi job, chạy DP trên TẤT CẢ máy, chọn best-fit theo tuple
+  (finish, timespan, fragments, machine_id), commit và trừ cửa sổ máy.
+- Cost: makespan thực = max end over all segments của mọi job.
+- In kết quả: finish đúng (= max end của job), horizon = makespan thực, Gantt theo máy.
+
+Chạy:
+  python3 -m staticAlgos.SA --config ./configs/splittable_jobs.json --mode timespan
+  # Tuỳ chọn:
+  --Tmax 500 --Tthreshold 1 --alpha 0.99 --moves_per_T 50 --seed 42 --verbose --out path.json
+"""
+
 import os
+import sys
 import json
 import math
 import random
 import argparse
-from copy import deepcopy
 from typing import Any, Dict, List, Tuple, Optional
 
+# ---- sys.path: add project root ----
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+# ---- DP funcs ----
 from split_job.dp_single_job import (
-    solve_min_timespan_cfg,              # (finish_time | None, allocation | None)
-    solve_feasible_leftover_rule_cfg    # (ok: bool, allocation | None)
+    solve_min_timespan_cfg,
+    solve_feasible_leftover_rule_cfg,
+    get_all_windows_from_config
 )
 
-# ============================== Helpers ==============================
+# =============================================================================
+# Utilities
+# =============================================================================
 
-def _gantt_from_detail(detail: dict) -> tuple[dict[int, list[tuple[int,int,int]]], int]:
-    """
-    Trích xuất các đoạn (start,end) theo từng máy từ detail['allocations'].
-    Trả về:
-      - segments_by_machine: {machine_id: [(start, end, job_id), ...]}
-      - horizon: max(last_finish_per_machine)
-    """
-    allocations = detail.get("allocations", {})
-    segments_by_machine: dict[int, list[tuple[int,int,int]]] = {}
-
-    for job_id, info in allocations.items():
-        machine_id = info["machine"]
-        for (window_index, segment_start, segment_end) in info["allocation"]:
-            segments_by_machine.setdefault(machine_id, []).append(
-                (segment_start, segment_end, job_id)
-            )
-
-    for m in segments_by_machine:
-        segments_by_machine[m].sort(key=lambda seg: (seg[0], seg[1]))
-
-    horizon = max(detail.get("last_finish", [0]))
-    return segments_by_machine, horizon
-
-
-def _render_gantt_ascii(
-    segments_by_machine: dict[int, list[tuple[int,int,int]]],
-    horizon: int,
-    max_width: int = 120,
-) -> str:
-    """
-    Vẽ Gantt chart ASCII. Nếu horizon quá lớn, tự scale để vừa max_width.
-    Ký hiệu:
-      - '.': idle (trống)
-      - '0'..'9': job_id % 10 (nếu job lớn hơn 9 thì lặp lại chữ số)
-    """
-    if horizon <= 0:
-        return "(empty schedule)"
-
-    scale = max(1, math.ceil(horizon / max_width))
-    width = horizon // scale + 1  # số ký tự cho mỗi dòng
-
-    lines = []
-    # từng máy một
-    for machine_id in sorted(segments_by_machine.keys()):
-        row = ['.'] * width
-        for start, end, job_id in segments_by_machine[machine_id]:
-            # tô kín [start, end)
-            for t in range(start, end):
-                idx = t // scale
-                if 0 <= idx < width:
-                    row[idx] = str(job_id % 10)
-        lines.append(f"M{machine_id:02d} | " + ''.join(row) + " |")
-
-    # thêm thước đo (scale)
-    scale_note = f"(scale = {scale} time-unit/char, horizon = {horizon})"
-    ruler = "     " + ''.join(['|' if (i % 10 == 0) else ' ' for i in range(width)])
-    index_line = "     " + ''.join([str((i*scale) % 10) for i in range(width)])
-
-    return "\n".join(lines + ["", scale_note, ruler, index_line])
-
-def _load_config(json_path: str) -> Dict[str, Any]:
-    with open(json_path, "r", encoding="utf-8") as f:
+def _load_config(path: str) -> Dict[str, Any]:
+    with open(path, "r") as f:
         return json.load(f)
 
-def _ensure_config(config_like: Dict[str, Any]) -> Dict[str, Any]:
-    return config_like if "model" in config_like else {"model": config_like}
+def _ensure_config(x: Dict[str, Any]) -> Dict[str, Any]:
+    return x if "model" in x else {"model": x}
 
-def _get_num_jobs(config: Dict[str, Any]) -> int:
-    model = config["model"]
-    if "num_jobs" in model:
-        return int(model["num_jobs"])
-    if "processing_times" in model:
-        return len(model["processing_times"])
-    raise ValueError("Model must include 'num_jobs' or 'processing_times'.")
+def _processing_times(cfg: Dict[str, Any]) -> List[int]:
+    return cfg["model"]["processing_times"]
 
-def _get_processing_times(config: Dict[str, Any]) -> List[int]:
-    model = config["model"]
-    if "processing_times" not in model:
-        raise ValueError("config['model']['processing_times'] is required.")
-    return list(model["processing_times"])
+def _split_min(cfg: Dict[str, Any]) -> int:
+    return cfg["model"]["split_min"]
 
-def _get_split_min(config: Dict[str, Any]) -> int:
-    model = config["model"]
-    split_min = model.get("split_min", None)
-    if split_min is None:
-        raise ValueError("config['model']['split_min'] is required.")
-    return int(split_min)
+# -----------------------------------------------------------------------------
 
-def _apply_allocation_to_windows(
-    windows: List[List[int]],
-    allocation: List[Tuple[int, int, int]],
-) -> List[List[int]]:
-    """
-    Trừ các đoạn đã dùng (allocation) khỏi 'windows'.
-    allocation phần tử: (window_index, segment_start, segment_end)
-    """
-    allocated_segments_by_window: Dict[int, List[Tuple[int, int]]] = {}
-    for window_index, segment_start, segment_end in allocation:
-        allocated_segments_by_window.setdefault(window_index, []).append((segment_start, segment_end))
+def _clone_windows(wins: List[List[List[int]]]) -> List[List[List[int]]]:
+    # deep-ish copy [[ [s,e], ... ] for each machine]
+    return [ [ [a, b] for (a, b) in mach ] for mach in wins ]
 
-    for window_index in allocated_segments_by_window:
-        allocated_segments_by_window[window_index].sort(key=lambda seg: seg[0])
+def _apply_plan_to_windows(windows: List[List[int]],
+                           plan: List[Tuple[int, int, int]]) -> List[List[int]]:
+    """Trừ các đoạn trong plan khỏi list windows [[s,e], ...] (cùng hệ quy chiếu thời gian)."""
+    cuts = [(s, e) for (_w, s, e) in plan]
+    cuts.sort()
 
-    remaining_windows: List[List[int]] = []
-    for idx, (window_start, window_end) in enumerate(windows):
-        if idx not in allocated_segments_by_window:
-            remaining_windows.append([window_start, window_end])
-            continue
-
-        cuts_for_window = allocated_segments_by_window[idx]
-        current_segments = [[window_start, window_end]]
-
-        for cut_start, cut_end in cuts_for_window:
-            next_segments: List[List[int]] = []
-            for avail_start, avail_end in current_segments:
-                # không giao
-                if cut_end <= avail_start or cut_start >= avail_end:
-                    next_segments.append([avail_start, avail_end])
+    new_windows = []
+    for (w_start, w_end) in windows:
+        segs = [(w_start, w_end)]
+        for (c_start, c_end) in cuts:
+            nxt = []
+            for (s, e) in segs:
+                if c_end <= s or c_start >= e:
+                    nxt.append((s, e))
                 else:
-                    # cắt trái
-                    if cut_start > avail_start:
-                        next_segments.append([avail_start, cut_start])
-                    # cắt phải
-                    if cut_end < avail_end:
-                        next_segments.append([cut_end, avail_end])
-            current_segments = next_segments
+                    if s < c_start:
+                        nxt.append((s, c_start))
+                    if c_end < e:
+                        nxt.append((c_end, e))
+            segs = nxt
+        for (s, e) in segs:
+            if e > s:
+                new_windows.append([s, e])
 
-        for seg_start, seg_end in current_segments:
-            if seg_start < seg_end:
-                remaining_windows.append([seg_start, seg_end])
-
-    # gộp các đoạn còn lại nếu liền nhau
-    remaining_windows.sort(key=lambda seg: (seg[0], seg[1]))
-    merged: List[List[int]] = []
-    for seg_start, seg_end in remaining_windows:
-        if not merged or seg_start > merged[-1][1]:
-            merged.append([seg_start, seg_end])
+    new_windows.sort()
+    merged = []
+    for s, e in new_windows:
+        if not merged or s > merged[-1][1]:
+            merged.append([s, e])
         else:
-            merged[-1][1] = max(merged[-1][1], seg_end)
+            merged[-1][1] = max(merged[-1][1], e)
     return merged
 
-def _swap_neighbor(job_order: List[int]) -> List[int]:
-    num_jobs = len(job_order)
-    if num_jobs < 2:
-        return job_order[:]
-    idx_a, idx_b = random.sample(range(num_jobs), 2)
-    new_order = job_order[:]
-    new_order[idx_a], new_order[idx_b] = new_order[idx_b], new_order[idx_a]
-    return new_order
-
-def _finish_time_from_allocation(allocation: List[Tuple[int, int, int]]) -> Optional[int]:
-    """Tính finish_time = max(segment_end) từ allocation."""
-    if not allocation:
-        return None
-    return max(segment_end for (_, _, segment_end) in allocation)
-
-# =================== Lập lịch 1 hoán vị bằng DP ======================
-
-def _schedule_with_order(
-    config: Dict[str, Any],
-    job_order: List[int],
+def _evaluate_job_on_machine(
     mode: str,
-) -> Tuple[int, Dict[str, Any]]:
+    ptime: int,
+    windows: List[List[int]],
+    split_min: int,
+) -> Tuple[Optional[int], Optional[List[Tuple[int,int,int]]], Optional[int], Optional[int]]:
     """
-    Gán tuần tự các job theo 'job_order' lên máy qua DP đơn-job.
-    - mode == "timespan": solve_min_timespan_cfg -> (finish_time, allocation)
-    - mode == "leftover": solve_feasible_leftover_rule_cfg -> (ok, allocation) + suy finish_time
-    Trả về (makespan, chi_tiet)
+    Trả về: (finish, plan, timespan, fragments)
+    - finish = max end của plan (None nếu không khả thi)
+    - timespan: obj từ DP (timespan tối thiểu ở mode='timespan'), dùng để tie-break
+    - fragments: số mảnh
     """
-    split_min = _get_split_min(config)
-    processing_times = _get_processing_times(config)
-    windows_per_machine = [
-        deepcopy(config["model"]["time_windows"][str(machine_id)])
-        for machine_id in range(config["model"]["num_machines"])
-        ]
+    if mode == "timespan":
+        obj, plan = solve_min_timespan_cfg(ptime, windows, split_min)
+    elif mode == "leftover":
+        obj, plan = solve_feasible_leftover_rule_cfg(ptime, windows, split_min)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
 
-    num_machines = len(windows_per_machine)
-    last_finish_per_machine = [0] * num_machines
-    allocation_by_job: Dict[int, Dict[str, Any]] = {}
+    if obj is None or not plan:
+        return None, None, None, None
 
-    for job_id in job_order:
-        best_machine_index: Optional[int] = None
-        best_finish_time: Optional[int] = None
-        best_allocation: Optional[List[Tuple[int, int, int]]] = None
+    finish = max(seg[2] for seg in plan)
+    timespan = obj if mode == "timespan" else ptime
+    fragments = len(plan)
+    return finish, plan, timespan, fragments
 
-        for machine_index in range(num_machines):
-            machine_windows = windows_per_machine[machine_index]
+def _decode_order_best_fit(
+    cfg: Dict[str, Any],
+    mode: str,
+    order: List[int],
+) -> Dict[str, Any]:
+    """
+    Từ một thứ tự job (order), dựng lịch bằng cách:
+      - Lặp job theo order,
+      - Trên MỌI máy: chạy DP, chọn best theo (finish, timespan, fragments, machine_id),
+      - Commit, trừ cửa sổ máy,
+      - Lưu assignment.
+    Trả về dict: { 'assignments': [...], 'final_windows': ..., 'makespan': int }
+    """
+    p_times = _processing_times(cfg)
+    split_min = _split_min(cfg)
+    mach_wins0 = get_all_windows_from_config(cfg)  # List[machine][ [s,e], ... ]
+    mach_wins = _clone_windows(mach_wins0)
+    n_machines = len(mach_wins)
 
-            if mode == "timespan":
-                finish_time, allocation = solve_min_timespan_cfg(
-                    processing_times[job_id], machine_windows, split_min
-                )
-                feasible = (finish_time is not None) and (allocation is not None)
-                candidate_finish_time = finish_time
-            elif mode == "leftover":
-                feasible, allocation = solve_feasible_leftover_rule_cfg(
-                    processing_times[job_id], machine_windows, split_min
-                )
-                candidate_finish_time = _finish_time_from_allocation(allocation) if feasible and allocation else None
-            else:
-                raise ValueError("mode must be 'timespan' or 'leftover'.")
-
-            if not feasible or candidate_finish_time is None:
+    assignments = []  # per job in given order (nhưng vẫn lưu tên job)
+    for j in order:
+        p = p_times[j]
+        best = None
+        for m in range(n_machines):
+            finish, plan, timespan, fragments = _evaluate_job_on_machine(
+                mode, p, mach_wins[m], split_min
+            )
+            if finish is None:
                 continue
+            key = (finish, timespan if timespan is not None else 10**15,
+                   fragments if fragments is not None else 10**9, m)
+            if best is None or key < best[0]:
+                best = (key, m, plan, finish, timespan, fragments)
 
-            if (best_finish_time is None) or (candidate_finish_time < best_finish_time):
-                best_finish_time = candidate_finish_time
-                best_machine_index = machine_index
-                best_allocation = allocation
-
-        if best_machine_index is None:
-            # Không gán được job này lên bất kỳ máy nào
-            return (10**15, {
-                "feasible": False,
-                "reason": f"Job {job_id} infeasible under current windows.",
-                "order": job_order
+        if best is None:
+            # Không gán được (giữ thông tin để debug)
+            assignments.append({
+                "job": j,
+                "machine": None,
+                "segments": [],
+                "timespan": None,
+                "finish": None,
+                "fragments": 0,
             })
+            continue
 
-        # Cập nhật windows còn lại cho máy được chọn
-        windows_per_machine[best_machine_index] = _apply_allocation_to_windows(
-            windows_per_machine[best_machine_index], best_allocation  # type: ignore[arg-type]
-        )
-        # Cập nhật thời điểm kết thúc
-        last_finish_per_machine[best_machine_index] = max(
-            last_finish_per_machine[best_machine_index],
-            best_finish_time  # type: ignore[arg-type]
-        )
+        _key, m_best, plan_best, finish, timespan, fragments = best
+        mach_wins[m_best] = _apply_plan_to_windows(mach_wins[m_best], plan_best)
+        assignments.append({
+            "job": j,
+            "machine": m_best,
+            "segments": plan_best,   # (win_idx, start, end)
+            "timespan": timespan,
+            "finish": finish,
+            "fragments": fragments,
+        })
 
-        # Ghi trace cho job
-        allocation_by_job[job_id] = {
-            "machine": best_machine_index,
-            "finish_time": best_finish_time,
-            "allocation": best_allocation,
-        }
-
-    makespan = max(last_finish_per_machine)
-    return makespan, {
-        "feasible": True,
-        "order": job_order[:],
-        "last_finish": last_finish_per_machine,
-        "allocations": allocation_by_job,
+    makespan = compute_makespan(assignments)
+    return {
+        "assignments": assignments,
+        "final_windows": mach_wins,
+        "makespan": makespan,
     }
 
-# ============================ SA chính ===============================
+# =============================================================================
+# Correct metrics & printing
+# =============================================================================
+
+def compute_job_finish(segments: List[Tuple[int,int,int]]) -> Optional[int]:
+    return max(seg[2] for seg in segments) if segments else None
+
+def compute_makespan(assignments: List[Dict[str, Any]]) -> int:
+    ends = []
+    for a in assignments:
+        for (_w, s, e) in a.get("segments", []):
+            ends.append(e)
+    return max(ends) if ends else 0
+
+def print_schedule(sa_result: Dict[str, Any], title: str = "SA RESULT") -> None:
+    ass = sa_result["assignments"]
+    mk = sa_result["makespan"]
+
+    print(f"\n=== {title} ===")
+    print(f"Best makespan: {mk}")
+
+    print("\nBest schedule (job -> machine, finish_time, allocation):")
+    for a in sorted(ass, key=lambda x: x["job"]):
+        j = a["job"]; m = a["machine"]; segs = a["segments"]
+        fin = compute_job_finish(segs)
+        print(f"  Job {j}: Machine {m}, finish={fin}, segments={segs}")
+
+    # Gantt ASCII theo máy (in danh sách các khoảng, tránh vẽ mk ký tự)
+    print("\nGantt chart (ASCII):")
+    by_m = {}
+    for a in ass:
+        if a["machine"] is None:
+            continue
+        by_m.setdefault(a["machine"], []).extend([(a["job"], s, e) for (_w, s, e) in a["segments"]])
+
+    for m in sorted(by_m.keys()):
+        intervals = sorted(by_m[m], key=lambda x: (x[1], x[2]))
+        labels = " ".join([f"[J{j}:{s}-{e}]" for (j, s, e) in intervals])
+        print(f"M{m:02d} | {labels}")
+    print(f"\n(horizon = {mk})")
+
+# =============================================================================
+# Simulated Annealing
+# =============================================================================
+
+def _neighbor_swap(order: List[int]) -> List[int]:
+    """Đổi chỗ 2 job ngẫu nhiên."""
+    n = len(order)
+    if n < 2:
+        return order[:]
+    i, j = random.sample(range(n), 2)
+    if i > j:
+        i, j = j, i
+    new_order = order[:]
+    new_order[i], new_order[j] = new_order[j], new_order[i]
+    return new_order
 
 def schedule_sa_config(
-    config: Dict[str, Any],
+    cfg: Dict[str, Any],
     mode: str = "timespan",
-    *,
     Tmax: float = 500.0,
     Tthreshold: float = 1.0,
     alpha: float = 0.99,
@@ -270,61 +248,68 @@ def schedule_sa_config(
     seed: Optional[int] = None,
     verbose: bool = False,
 ) -> Dict[str, Any]:
+    """
+    Chạy SA trên không gian thứ tự job.
+    - State: order (list job id)
+    - Decode: _decode_order_best_fit(cfg, mode, order)
+    - Cost: makespan của lịch decode
+    """
     if seed is not None:
         random.seed(seed)
 
-    config = _ensure_config(config)
-    num_jobs = _get_num_jobs(config)
+    cfg = _ensure_config(cfg)
+    p_times = _processing_times(cfg)
+    n_jobs = len(p_times)
+    # Khởi tạo: order mặc định 0..n-1
+    cur_order = list(range(n_jobs))
+    cur_decoded = _decode_order_best_fit(cfg, mode, cur_order)
+    cur_cost = float(cur_decoded["makespan"])
 
-    current_order = list(range(num_jobs))
-    random.shuffle(current_order)
+    best_order = cur_order[:]
+    best_decoded = cur_decoded
+    best_cost = cur_cost
 
-    current_makespan, current_detail = _schedule_with_order(config, current_order, mode)
-    best_makespan, best_detail = current_makespan, current_detail
-    best_order = current_order[:]
-
-    if verbose:
-        print(f"[SA] init: order={current_order}, makespan={current_makespan}")
-
-    temperature = float(Tmax)
-    while temperature >= Tthreshold:
+    T = float(Tmax)
+    while T > Tthreshold:
         for _ in range(moves_per_T):
-            candidate_order = _swap_neighbor(current_order)
-            candidate_makespan, _ = _schedule_with_order(config, candidate_order, mode)
+            cand_order = _neighbor_swap(cur_order)
+            cand_decoded = _decode_order_best_fit(cfg, mode, cand_order)
+            cand_cost = float(cand_decoded["makespan"])
+            delta = cand_cost - cur_cost
 
-            delta = candidate_makespan - current_makespan
-            accept = (delta < 0) or (random.random() < math.exp(-delta / temperature if temperature > 0 else -1e9))
+            if delta <= 0:
+                accept = True
+            else:
+                # Metropolis
+                prob = math.exp(-delta / max(T, 1e-9))
+                accept = (random.random() < prob)
 
             if accept:
-                current_order = candidate_order
-                current_makespan = candidate_makespan
-
-                if current_makespan < best_makespan:
-                    best_makespan = current_makespan
-                    best_order = current_order[:]
-                    # Tính lại chi tiết cho best (để lưu allocations chuẩn)
-                    best_makespan, best_detail = _schedule_with_order(config, best_order, mode)
+                cur_order = cand_order
+                cur_decoded = cand_decoded
+                cur_cost = cand_cost
+                if cur_cost < best_cost:
+                    best_cost = cur_cost
+                    best_order = cur_order[:]
+                    best_decoded = cur_decoded
                     if verbose:
-                        print(f"[SA] improved: T={temperature:.2f}, makespan={best_makespan}, order={best_order}")
+                        print(f"[SA] improved: cost={best_cost:.3f} at T={T:.3f}")
 
-        temperature *= alpha
+        T *= alpha
+        if verbose:
+            print(f"[SA] cool down: T={T:.4f}, best={best_cost:.3f}")
 
+    # Kết quả
     return {
-        "algo": "SA",
-        "params": {
-            "Tmax": Tmax,
-            "Tthreshold": Tthreshold,
-            "alpha": alpha,
-            "moves_per_T": moves_per_T,
-            "seed": seed,
-            "mode": mode,
-        },
-        "best_makespan": best_makespan,
+        "best_makespan": int(best_cost),
         "best_order": best_order,
-        "detail": best_detail,  # allocations theo job + last_finish per machine
+        "assignments": best_decoded["assignments"],
+        "final_windows": best_decoded["final_windows"],
     }
 
-# ============================== CLI =================================
+# =============================================================================
+# CLI
+# =============================================================================
 
 def main():
     parser = argparse.ArgumentParser(description="Simulated Annealing for Splittable Job Scheduling (DP per job).")
@@ -339,9 +324,9 @@ def main():
     parser.add_argument("--out", type=str, default="", help="Optional path to write JSON result.")
     args = parser.parse_args()
 
-    config = _load_config(args.config)
+    cfg = _load_config(args.config)
     result = schedule_sa_config(
-        config,
+        cfg,
         mode=args.mode,
         Tmax=args.Tmax,
         Tthreshold=args.Tthreshold,
@@ -351,35 +336,46 @@ def main():
         verbose=args.verbose,
     )
 
+    # In kết quả chuẩn
+    printable = {
+        "assignments": result["assignments"],
+        "makespan": compute_makespan(result["assignments"]),
+    }
     print("\n=== SA RESULT ===")
-    print("Mode:", result["params"]["mode"])
-    print("Best makespan:", result["best_makespan"])
-    print("Best order:", result["best_order"])
+    print(f"Mode: {args.mode}")
+    print(f"Best makespan: {printable['makespan']}")
+    print(f"Best order: {result['best_order']}\n")
+    print("Best schedule (job -> machine, finish_time, allocation):")
+    for a in sorted(result["assignments"], key=lambda x: x["job"]):
+        j = a["job"]; m = a["machine"]; segs = a["segments"]
+        fin = compute_job_finish(segs)
+        print(f"  Job {j}: Machine {m}, finish={fin}, segments={segs}")
 
-    # In lịch chi tiết (job -> machine, finish_time, segments) ###
-    if "detail" in result and result["detail"].get("feasible", False):
-        print("\nBest schedule (job -> machine, finish_time, allocation):")
-        allocations = result["detail"]["allocations"]
-        for job_id in result["best_order"]:
-            info = allocations[job_id]
-            print(
-                f"  Job {job_id}: Machine {info['machine']}, "
-                f"finish={info['finish_time']}, "
-                f"segments={info['allocation']}"
-            )
-
-        # ### Vẽ Gantt chart ASCII ###
-        segments_by_machine, horizon = _gantt_from_detail(result["detail"])
-        print("\nGantt chart (ASCII):")
-        print(_render_gantt_ascii(segments_by_machine, horizon))
-    else:
-        print("\n(No feasible schedule detail to render)")
+    # Gantt
+    print("\nGantt chart (ASCII):")
+    mk = printable["makespan"]
+    by_m = {}
+    for a in result["assignments"]:
+        if a["machine"] is None:
+            continue
+        by_m.setdefault(a["machine"], []).extend([(a["job"], s, e) for (_w, s, e) in a["segments"]])
+    for m in sorted(by_m.keys()):
+        intervals = sorted(by_m[m], key=lambda x: (x[1], x[2]))
+        labels = " ".join([f"[J{j}:{s}-{e}]" for (j, s, e) in intervals])
+        print(f"M{m:02d} | {labels}")
+    print(f"\n(horizon = {mk})")
 
     if args.out:
-        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
-        with open(args.out, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
-        print(f"Wrote result to: {args.out}")
+        payload = {
+            "mode": args.mode,
+            "best_order": result["best_order"],
+            "makespan": printable["makespan"],
+            "assignments": result["assignments"],
+            "final_windows": result["final_windows"],
+        }
+        with open(args.out, "w") as f:
+            json.dump(payload, f, indent=2)
+        print(f"\nSaved result to: {args.out}")
 
 if __name__ == "__main__":
     main()
