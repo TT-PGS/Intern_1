@@ -2,6 +2,7 @@ import json
 import os
 from typing import List, Tuple, Optional, Dict, Any
 from typing import List, Tuple, Optional
+from base.io_handler import ReadJsonIOHandler
 
 def get_windows_from_config(config: Dict[str, Any], machine_id: str) -> List[List[int]]:
     """Lấy danh sách time windows [[start,end],...] của 1 máy từ config."""
@@ -144,20 +145,19 @@ def solve_feasible_leftover_rule_cfg(
     )
     num_windows = len(windows_sorted)
     if num_windows == 0:
-        return (total_processing_time == 0, []) if total_processing_time == 0 else (False, None)
+        return (0, []) if total_processing_time == 0 else (None, None)
 
     capacities = [b - a for a, b in windows_sorted]
     starts = [a for a, _ in windows_sorted]
 
     if total_processing_time <= 0 or split_min <= 0 or sum(capacities) < total_processing_time:
-        return False, None
+        return None, None
 
-    # Các lựa chọn k cho từng window
     choices: List[List[int]] = []
     for cap in capacities:
-        opts: List[int] = [0]
+        opts = [0]
         if cap >= split_min:
-            opts.append(cap)  # full
+            opts.append(cap)
             max_partial = cap - split_min
             if max_partial >= split_min:
                 for k in range(max_partial, split_min - 1, -1):
@@ -172,7 +172,6 @@ def solve_feasible_leftover_rule_cfg(
     reach[num_windows][0] = True
     parent[num_windows][0] = (-1, 0)
 
-    # DP kiểm tra khả thi
     for win_idx in range(num_windows - 1, -1, -1):
         for remain in range(0, T + 1):
             if reach[win_idx + 1][remain]:
@@ -184,12 +183,11 @@ def solve_feasible_leftover_rule_cfg(
                 if k <= remain and reach[win_idx + 1][remain - k]:
                     reach[win_idx][remain] = True
                     parent[win_idx][remain] = (k, remain - k)
-                    break  # ưu tiên k đầu tiên trong choices
+                    break
 
     if not reach[0][T]:
-        return False, None
+        return None, None
 
-    # Truy vết để dựng plan
     alloc: List[Tuple[int, int, int]] = []
     win_idx, remain = 0, T
     while win_idx < num_windows and remain > 0:
@@ -200,7 +198,9 @@ def solve_feasible_leftover_rule_cfg(
         remain = rem
         win_idx += 1
 
-    return True, alloc
+    finish_time = max(end for (_, _, end) in alloc) if alloc else 0
+    return finish_time, alloc
+
 
 
 if __name__ == "__main__":

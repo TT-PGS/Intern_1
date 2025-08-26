@@ -5,6 +5,7 @@ import argparse
 import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Optional
+from copy import deepcopy
 
 # ---------------------------------------------
 # Project import path (project root one level up)
@@ -236,7 +237,20 @@ def run_ga(config: Dict[str, Any], params: GAParams, mode: str = "timespan") -> 
     if params.seed is not None:
         random.seed(params.seed)
 
-    model = config["model"]
+    # --- normalize model & time_windows keys to int ---
+    model_in = config["model"]
+    model = deepcopy(model_in)
+
+    tw_raw = model["time_windows"]
+    # Chuyển key -> int, và đảm bảo giá trị là list[int, int]
+    time_windows = {
+        int(k): [[int(a), int(b)] for (a, b) in v]
+        for k, v in tw_raw.items()
+    }
+    model["time_windows"] = time_windows
+    # Đồng bộ lại num_machines nếu cần
+    model["num_machines"] = int(model.get("num_machines", len(time_windows)))
+
     num_jobs = int(model["num_jobs"])
     num_machines = int(model["num_machines"])
     processing_times: List[int] = list(model["processing_times"])
