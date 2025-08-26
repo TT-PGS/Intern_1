@@ -7,21 +7,9 @@
       "job": 0,
       "machine": 0,
       "plan": [
-        [
-          0,
-          0,
-          9
-        ],
-        [
-          1,
-          9,
-          16
-        ],
-        [
-          2,
-          16,
-          22
-        ]
+        [0, 0, 9],
+        [1, 9, 16],
+        [2, 16, 22]
       ],
       "timespan": 22,
       "finish": 22,
@@ -30,13 +18,7 @@
     {
       "job": 1,
       "machine": 1,
-      "plan": [
-        [
-          2,
-          8,
-          14
-        ]
-      ],
+      "plan": [[2, 8, 14]],
       "timespan": 6,
       "finish": 14,
       "fragments": 1
@@ -44,13 +26,7 @@
     {
       "job": 2,
       "machine": 1,
-      "plan": [
-        [
-          1,
-          14,
-          26
-        ]
-      ],
+      "plan": [[1, 14, 26]],
       "timespan": 12,
       "finish": 26,
       "fragments": 1
@@ -58,13 +34,7 @@
     {
       "job": 3,
       "machine": 1,
-      "plan": [
-        [
-          0,
-          0,
-          5
-        ]
-      ],
+      "plan": [[0, 0, 5]],
       "timespan": 5,
       "finish": 5,
       "fragments": 1
@@ -72,13 +42,7 @@
     {
       "job": 4,
       "machine": 0,
-      "plan": [
-        [
-          0,
-          22,
-          27
-        ]
-      ],
+      "plan": [[0, 22, 27]],
       "timespan": 5,
       "finish": 27,
       "fragments": 1
@@ -86,13 +50,7 @@
     {
       "job": 5,
       "machine": 1,
-      "plan": [
-        [
-          1,
-          26,
-          30
-        ]
-      ],
+      "plan": [[1, 26, 30]],
       "timespan": 4,
       "finish": 30,
       "fragments": 1
@@ -100,13 +58,7 @@
     {
       "job": 6,
       "machine": 0,
-      "plan": [
-        [
-          0,
-          27,
-          50
-        ]
-      ],
+      "plan": [[0, 27, 50]],
       "timespan": 23,
       "finish": 50,
       "fragments": 1
@@ -114,13 +66,7 @@
     {
       "job": 7,
       "machine": 1,
-      "plan": [
-        [
-          1,
-          30,
-          48
-        ]
-      ],
+      "plan": [[1, 30, 48]],
       "timespan": 18,
       "finish": 48,
       "fragments": 1
@@ -128,13 +74,7 @@
     {
       "job": 8,
       "machine": 1,
-      "plan": [
-        [
-          1,
-          48,
-          70
-        ]
-      ],
+      "plan": [[1, 48, 70]],
       "timespan": 22,
       "finish": 70,
       "fragments": 1
@@ -142,34 +82,17 @@
     {
       "job": 9,
       "machine": 0,
-      "plan": [
-        [
-          0,
-          50,
-          64
-        ]
-      ],
+      "plan": [[0, 50, 64]],
       "timespan": 14,
       "finish": 64,
       "fragments": 1
     }
   ],
-  "final_windows": [
-    [
-      [
-        64,
-        107070
-      ]
-    ],
-    [
-      [
-        5,
-        8
-      ],
-      [
-        70,
-        107073
-      ]
+  "final_windows": {
+    "0": [[64, 107070]],
+    "1": [
+      [5, 8],
+      [70, 107073]
     ]
-  ]
+  }
 }

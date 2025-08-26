@@ -58,8 +58,8 @@ class SimpleSplitSchedulingEnv(gym.Env):
     def action_dim(self) -> int:
         return int(self.action_space.n)
 
-    def encode_action(self, j: int, m: int) -> int:
-        return j * self.num_machines + m
+    def encode_action(self, job_id: int, machine_id: int) -> int:
+        return job_id * self.num_machines + machine_id
 
     def decode_action(self, a: int) -> tuple[int, int]:
         return (a // self.num_machines, a % self.num_machines)

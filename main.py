@@ -13,12 +13,6 @@ from base.runner import run_episode
 from agents.train_dqn import train_dqn
 
 # ==== Static algorithms ====
-# FCFS (best-fit across machines, DP per job)
-# returns dict: {makespan, assignments, final_windows, ...}
-# SA (Simulated Annealing, optimize job order; decode by best-fit across machines)
-# returns dict: {best_makespan, best_order, assignments, final_windows}
-# GA (Genetic Algorithm, optimize order + machine genes; decode by best-fit across machines)
-# returns (best_genome, decoded_best_result)
 from staticAlgos.FCFS import schedule_fcfs
 from staticAlgos.SA import schedule_sa_config
 from staticAlgos.GA import run_ga, GAParams
@@ -26,13 +20,6 @@ from staticAlgos.GA import run_ga, GAParams
 # ---------------------------
 # Helpers
 # ---------------------------
-
-def load_config(path: str) -> dict:
-    with open(path, "r") as f:
-        return json.load(f)
-
-def ensure_config(x: dict) -> dict:
-    return x if "model" in x else {"model": x}
 
 def compute_makespan_from_assignments(assignments):
     max_end = 0
@@ -48,7 +35,7 @@ def print_assignments(assignments):
     Hỗ trợ đầu ra đồng nhất cho FCFS/SA/GA (đã chuẩn hóa thành 'assignments').
     """
     if not assignments:
-        print("⚠️  Empty schedule")
+        print("Empty schedule")
         return
     print("Best schedule (job -> machine, finish_time, allocation):")
     # sort theo job id để dễ đọc
@@ -65,7 +52,7 @@ def maybe_write_out(out_path: str, payload: dict):
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     with open(out_path, "w") as f:
         json.dump(payload, f, indent=2)
-    print(f"\n💾 Saved result to: {out_path}")
+    print(f"\nSaved result to: {out_path}")
 
 # ---------------------------
 # Main
@@ -80,18 +67,14 @@ def main():
                         help="Path to JSON config containing 'model'")
     parser.add_argument("--out", type=str, default="",
                         help="Optional path to write JSON result (assignments, makespan, etc.)")
+    parser.add_argument("--split-mode", type=str, default="timespan", choices=["timespan", "leftover"],
+                        help="DP mode for splitting jobs when assigning to machines")
 
     # RL options
     parser.add_argument("--dqn-episodes", type=int, default=10, help="DQN training episodes")
     parser.add_argument("--dqn-model", type=str, default="qnet.pt", help="Path to save/load DQN weights")
 
-    # FCFS options
-    parser.add_argument("--fcfs-mode", type=str, default="timespan", choices=["timespan", "leftover"],
-                        help="DP mode for FCFS")
-
     # SA options
-    parser.add_argument("--sa-mode", type=str, default="timespan", choices=["timespan", "leftover"],
-                        help="DP mode for SA decode")
     parser.add_argument("--sa-Tmax", type=float, default=500.0)
     parser.add_argument("--sa-Tthreshold", type=float, default=1.0)
     parser.add_argument("--sa-alpha", type=float, default=0.99)
@@ -100,8 +83,6 @@ def main():
     parser.add_argument("--sa-verbose", action="store_true")
 
     # GA options
-    parser.add_argument("--ga-mode", type=str, default="timespan", choices=["timespan", "leftover"],
-                        help="DP mode for GA decode")
     parser.add_argument("--ga-pop", type=int, default=40)
     parser.add_argument("--ga-gen", type=int, default=200)
     parser.add_argument("--ga-cx", type=float, default=0.9)
@@ -116,8 +97,7 @@ def main():
 
     # Load config
     io_json_input_file_path = args.config
-    cfg = load_config(io_json_input_file_path)
-    cfg = ensure_config(cfg)
+    cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
 
     # Mode resolution
     mode = (args.mode or os.environ.get("SCHEDULER_MODE") or "dqn").lower()
@@ -126,8 +106,7 @@ def main():
 
     # ---------------- RL branch ----------------
     if mode == "dqn":
-        model_obj = ReadJsonIOHandler(io_json_input_file_path).get_input()
-        env = SimpleSplitSchedulingEnv(model_obj)
+        env = SimpleSplitSchedulingEnv(cfg)
         agent_name = mode
 
         model_path = args.dqn_model
@@ -149,14 +128,14 @@ def main():
     # ---------------- Static algorithms ----------------
     if mode == "fcfs":
         print("\nRunning FCFS (best-fit across machines, DP per job)...")
-        res = schedule_fcfs(cfg, mode=args.fcfs_mode)
-        print(f"Mode: {args.fcfs_mode}")
+        res = schedule_fcfs(cfg, mode=args.split_mode)
+        print(f"Mode: {args.split_mode}")
         print(f"Overall timespan: {res['makespan']} (start={res['overall']['start']}, finish={res['overall']['finish']})\n")
         print_assignments(res["assignments"])
 
         payload = {
             "algorithm": "fcfs",
-            "mode": args.fcfs_mode,
+            "mode": args.split_mode,
             "makespan": res["makespan"],
             "assignments": res["assignments"],
             "final_windows": res["final_windows"],
@@ -168,7 +147,7 @@ def main():
         print("\nRunning SA ...")
         res = schedule_sa_config(
             cfg,
-            mode=args.sa_mode,
+            mode=args.split_mode,
             Tmax=args.sa_Tmax,
             Tthreshold=args.sa_Tthreshold,
             alpha=args.sa_alpha,
@@ -183,14 +162,14 @@ def main():
         if mk is None or mk == 0:
             mk = compute_makespan_from_assignments(assignments)
 
-        print(f"Mode: {args.sa_mode}")
+        print(f"Mode: {args.split_mode}")
         print(f"Best makespan: {mk}")
         print(f"Best order: {order}\n")
         print_assignments(assignments)
 
         payload = {
             "algorithm": "sa",
-            "mode": args.sa_mode,
+            "mode": args.split_mode,
             "best_order": order,
             "makespan": mk,
             "assignments": assignments,
@@ -212,9 +191,9 @@ def main():
             seed=args.ga_seed,
         )
 
-        ga_res = run_ga(cfg, params, mode=args.ga_mode)
+        ga_res = run_ga(cfg, params, mode=args.split_mode)
 
-        print(f"Mode: {args.ga_mode}")
+        print(f"Mode: {args.split_mode}")
         print(f"Makespan: {ga_res['makespan']}")
         print(f"Best order: {ga_res['order']}")
         print(f"Machine genes: {ga_res['machines']}")
@@ -254,7 +233,7 @@ def main():
 
         payload = {
             "algorithm": "ga",
-            "mode": args.ga_mode,
+            "mode": args.split_mode,
             "best_genome": {"order": ga_res["order"], "machine_genes": ga_res["machines"]},
             "makespan": ga_res["makespan"],
             "assignments": assignments,  # để viz/validator dùng ngay

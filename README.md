@@ -1,40 +1,40 @@
 # Intern_1
 
-project for Intern 1
+## Project for Intern 1
 
 This repository aims to create a modular framework, not just a one-off solution, for scheduling problems using RL and DRL.  
 By separating concerns into independent modules and interfaces, we make it easier to manage, extend, and experiment with various RL-based strategies for splittable task scheduling.  
-In addition, the scheduling model itself is configurable and adaptable, allowing future modifications in problem definition or constraints.  
+In addition, the scheduling model itself is configurable and adaptable, allowing future modifications in problem definition or constraints.
 
-----------------------------------------------------------
+---
 
 ```text
 Intern_1/
 │
 ├── base/                           # 💡 Các interface nền tảng, cấu trúc lõi
 │   ├── agent_base.py               # AgentBase: giao diện chung cho agent
-│   ├── io_handler.py               # IOHandler: input/output xử lý
+│   ├── io_handler.py               # IOHandler: xử lý input/output (load file json, ...)
 │   ├── model.py                    # SchedulingModel: mô tả bài toán
 │   ├── runner.py                   # run_episode(): vòng lặp tương tác agent-env
 │
 ├── agents/                         # 🤖 Các agent cụ thể kế thừa từ AgentBase
-│   ├── random_agent.py             # Agent chọn action ngẫu nhiên
 │   ├── dqn_agent.py                # 🤖 Định nghĩa DQNAgent
 │   ├── q_net.py                    # 🧠 Định nghĩa mạng nơ-ron Q-Network
 │   ├── replay_buffer.py            # 📦 Replay buffer (experience replay)
 │   ├── train_dqn.py                # 🎓 Huấn luyện DQNAgent qua nhiều tập
-│   └── agent_factory.py            # AgentFactory để load agent qua tên ( hiện tại: "dqn", "random")
+│   └── agent_factory.py            # AgentFactory để load agent qua tên (hiện tại: "dqn")
 │
-├── envs/                           # 🌍 Môi trường RL cụ thể (có thể theo chuẩn gym)
+├── envs/                           # 🌍 Môi trường RL cụ thể (theo chuẩn gym)
 │   └── simple_split_env.py         # SimpleSplitSchedulingEnv
 │
 ├── configs/                        # ⚙️ Các file config YAML/JSON để cấu hình model
-│   └── splittable_jobs.json        # Config cho số job, máy, size theo định dạng json
+│   ├── splittable_jobs.json        # Config cho số job, máy, size theo định dạng json
+│   └── input_10_2_4_1.json         # 1 testcase chạy thử, lấy từ code MinSplit (thoả các điều kiện của testcase trong bài báo)
 │
-├── metrics/                        # 📈 Đánh giá kết quả (makespan, fairness...)
+├── metrics/                        # 📈 Đánh giá kết quả (makespan, fairness...) - Hiện tại chưa có #TODO
 │   └── evaluator.py                # Tính metrics từ lịch/schedule
 │
-├── logger/                         # 📊 Module ghi dữ liệu training dưới dạng số liệu
+├── logger/                         # 📊 Module ghi dữ liệu training dưới dạng số liệu - Hiện tại chưa có #TODO
 │   ├── structured_logger.py        # Log dạng JSON-line, Prometheus-style, Influx, etc.
 │   ├── exporters/
 │   │   ├── json_exporter.py        # Ghi JSON theo thời gian thực
@@ -43,7 +43,7 @@ Intern_1/
 │   └── schema/
 │       └── reward_schema.json      # Chuẩn schema log (dễ mapping sau)
 │
-├── logs/                           # 📁 Tự sinh log (file json hoặc gửi thẳng DB)
+├── logs/                           # 📁 Tự sinh log (file json hoặc gửi thẳng DB) - Hiện tại chưa có #TODO
 │   └── 2025-07-22_12-30-00/
 │       ├── reward_log.jsonl        # JSON line từng episode
 │       └── metadata.yaml
@@ -52,61 +52,24 @@ Intern_1/
 └── requirements.txt                # Python dependencies
 ```
 
-----------------------------------------------------------
+# How to run
 
-                    ┌────────────────────────────┐
-                    │      SchedulingModel       │  ◀── Có thể mở rộng mô hình (số job, máy...)
-                    └────────────┬───────────────┘
-                                 │
-                           tạo environment
-                                 │
-                                 ▼
-                    ┌────────────────────────────┐
-                    │      env.reset()           │  ◀── Trả về trạng thái ban đầu
-                    └────────────┬───────────────┘
-                                 │
-                          state: np.ndarray
-                                 │
-                                 ▼
-                ┌────────────────────────────────────┐
-                │         IOHandler.get_input()      │  ◀── Có thể override: xử lý state đầu vào
-                └────────────┬───────────────────────┘
-                                 │
-                         state_input: np.ndarray
-                                 │
-                                 ▼
-              ┌────────────────────────────────────────┐
-              │        AgentBase.select_action()       │  ◀── Thay thế agent ở đây: Random, Q, PPO...
-              └────────────────┬───────────────────────┘
-                               │
-                           action: int
-                               │
-                               ▼
-              ┌────────────────────────────────────┐
-              │         IOHandler.show_output()    │  ◀── Có thể override: print/log/GUI
-              └────────────────┬───────────────────┘
-                               │
-                               ▼
-                  ┌────────────────────────┐
-                  │    env.step(action)    │  ◀── Môi trường cập nhật state & trả reward
-                  └──────┬────────┬────────┘
-                         │        │
-             next_state: np.ndarray   reward: float
-                         │
-                         ▼
-       ┌─────────────────────────────────────────────────────┐
-       │     AgentBase.update(state, action, reward, ...)    │  ◀── Cho agent học từ kết quả hành động
-       └─────────────────────────────────────────────────────┘
-                         │
-                         ▼
-                    Loop tới bước đầu nếu !done
+## Run cmd
 
---------------------------------------------------------------
+source /home/a/PGS/Intern_1/MinSplit/bin/activate
 
-| Mục        | Class / Function          | Mục đích                                            |
-| ---------- | ------------------------- | --------------------------------------------------- |
-| 🧠 Agent   | `AgentBase`               | Thay đổi chính sách hành động: random, Q-table, PPO |
-| 🧾 Input   | `IOHandler.get_input()`   | Tiền xử lý input, ví dụ scale, encode,...           |
-| 📤 Output  | `IOHandler.show_output()` | Thay vì `print()`, có thể log ra file, vẽ lên GUI   |
-| 🧩 Mô hình | `SchedulingModel`         | Dễ thay đổi nếu có deadline, job ưu tiên,...        |
-| 🔁 Loop    | `run_episode()`           | Dễ tích hợp training loop, logging, stop condition  |
+#### 1. For running DQN (not success yet)
+
+python -m main --mode dqn --config ./configs/input_10_2_4_1.json --dqn-episodes 10 --dqn-model qnet.pt
+
+#### 2. For running GA
+
+python -m main --mode ga --config ./configs/input_10_2_4_1.json --split-mode timespan --ga-pop 40 --ga-gen 200 --ga-cx 0.9 --ga-mut 0.2 --ga-tk 5 --ga-seed 42 --ga-verbose --out ./results_ga.json
+
+#### 3. For running SA
+
+python -m main --mode sa --config ./configs/input_10_2_4_1.json --split-mode timespan --sa-Tmax 500 --sa-Tthreshold 1 --sa-alpha 0.99 --sa-moves-per-T 50 --sa-seed 42 --out ./results_sa.json
+
+#### 4. For running FCFS
+
+python -m main --mode fcfs --config ./configs/input_10_2_4_1.json --split-mode timespan --out ./results_fcfs.json

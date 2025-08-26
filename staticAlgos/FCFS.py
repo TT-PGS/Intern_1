@@ -3,43 +3,26 @@ FCFS scheduler: schedule các job theo thứ tự đến; nếu cùng arrival, j
 Việc gán job vào machine được thực hiện bởi dp_single_job.py (Dynamic Programming).
 
 Chạy:
-  python3 -m staticAlgos.FCFS --mode timespan --config ./configs/splittable_jobs.json
-  python3 -m staticAlgos.FCFS --mode leftover --config ./configs/splittable_jobs.json
+    python3 -m staticAlgos.FCFS --mode timespan --config ./configs/splittable_jobs.json
+    python3 -m staticAlgos.FCFS --mode leftover --config ./configs/splittable_jobs.json
 """
 
-import os, sys, json, argparse
+import os, sys, argparse
 from typing import Any, Dict, List, Tuple, Optional
 
-# Thêm project root vào sys.path
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-# Gọi lại các hàm đã có
+from base.io_handler import ReadJsonIOHandler
+from base.model import SchedulingModel
+
 from split_job.dp_single_job import (
     solve_min_timespan_cfg,
-    solve_feasible_leftover_rule_cfg,
-    get_all_windows_from_config,
+    solve_feasible_leftover_rule_cfg
 )
 
 # ----------------------- util -----------------------
-
-def _load_config(path: str) -> Dict[str, Any]:
-    with open(path, "r") as f:
-        return json.load(f)
-
-def _ensure_config(x: Dict[str, Any]) -> Dict[str, Any]:
-    return x if "model" in x else {"model": x}
-
-def _jobs_processing_times(cfg: Dict[str, Any]) -> List[int]:
-    return cfg["model"]["processing_times"]
-
-def _split_min(cfg: Dict[str, Any]) -> int:
-    return cfg["model"]["split_min"]
-
-def _arrival_order(num_jobs: int) -> List[int]:
-    # FCFS: nếu tất cả arrival=0 thì về mặc định là [0..n-1]
-    return list(range(num_jobs))
 
 def _apply_plan_to_windows(windows: List[List[int]], plan: List[Tuple[int,int,int]]) -> List[List[int]]:
     """
@@ -59,10 +42,10 @@ def _apply_plan_to_windows(windows: List[List[int]], plan: List[Tuple[int,int,in
             next_segs = []
             for (s, e) in segs:
                 if c_end <= s or c_start >= e:
-                    # không giao
+                    # không giao job cho đoạn này
                     next_segs.append((s, e))
                 else:
-                    # có giao, cắt
+                    # có giao job, cắt windows thừa
                     if s < c_start:
                         next_segs.append((s, c_start))
                     if c_end < e:
@@ -83,16 +66,16 @@ def _apply_plan_to_windows(windows: List[List[int]], plan: List[Tuple[int,int,in
     return merged
 
 def _evaluate_assignment(mode: str,
-                         ptime: int,
-                         windows: List[List[int]],
-                         split_min: int) -> Tuple[Optional[int], Optional[List[Tuple[int,int,int]]], Optional[int], Optional[int]]:
+                        ptime: int,
+                        windows: List[List[int]],
+                        split_min: int) -> Tuple[Optional[int], Optional[List[Tuple[int,int,int]]], Optional[int], Optional[int]]:
     """
     Trả về: (finish, plan, timespan, fragments)
     - finish: thời điểm kết thúc (max end trong plan)
     - timespan: tổng thời gian xử lý (== ptime) hoặc min_timespan tùy hàm DP trả về
     - fragments: số mảnh
     Lưu ý: solve_* trả về (objective, plan). Với 'timespan' ta dùng solve_min_timespan_cfg.
-           Với 'leftover' ta gọi solve_feasible_leftover_rule_cfg (đồng nhất cách xử lý).
+        Với 'leftover' ta gọi solve_feasible_leftover_rule_cfg (đồng nhất cách xử lý).
     """
     if mode == "timespan":
         obj, plan = solve_min_timespan_cfg(ptime, windows, split_min)
@@ -116,37 +99,35 @@ def _evaluate_assignment(mode: str,
 
 # ----------------------- core FCFS -----------------------
 
-def schedule_fcfs(config: Dict[str, Any], mode: str = "timespan") -> Dict[str, Any]:
-    cfg = _ensure_config(config)
-    p_times = _jobs_processing_times(cfg)
-    n_jobs = len(p_times)
-    split_min = _split_min(cfg)
+def schedule_fcfs(cfg: SchedulingModel, mode: str = "timespan") -> Dict[str, Any]:
+    processing_times = cfg.get_processing_times()
+    number_of_jobs = cfg.get_num_jobs()
+    split_min = cfg.get_split_min()
+    machine_windows = cfg.get_time_windows()
+    number_of_machines = cfg.get_num_machines()
 
-    # Khởi tạo windows per machine từ config (dạng [[start,end], ...])
-    machine_windows = get_all_windows_from_config(cfg)  # List[List[List[int]]], mỗi máy là list các [start,end]
-    n_machines = len(machine_windows)
-
-    # FCFS theo order đến
-    order = _arrival_order(n_jobs)
+    # Hiện tại giả sử tất cả job cùng arrival=0, xếp theo job_id từ 0..N-1, 0 là ưu tiên nhất
+    order = list(range(number_of_jobs))
 
     assignments = []  # list dict per job
-    for j in order:
-        p = p_times[j]
+    for job_id in order:
+        job_processing_time = processing_times[job_id]
 
         # Dò tất cả máy → lấy best theo (finish, timespan, fragments, machine_id)
+        # Nói cách khác, tìm máy rảnh sớm nhất để gán job này
         best = None  # (key_tuple, m_best, plan_best)
-        for m in range(n_machines):
-            finish, plan, timespan, fragments = _evaluate_assignment(mode, p, machine_windows[m], split_min)
+        for machine_id in range(number_of_machines):
+            finish, plan, timespan, fragments = _evaluate_assignment(mode, job_processing_time, machine_windows[machine_id], split_min)
             if finish is None:
                 continue
-            key = (finish, timespan if timespan is not None else 10**15, fragments if fragments is not None else 10**9, m)
+            key = (finish, timespan if timespan is not None else 10**15, fragments if fragments is not None else 10**9, machine_id)
             if best is None or key < best[0]:
-                best = (key, m, plan, finish, timespan, fragments)
+                best = (key, machine_id, plan, finish, timespan, fragments)
 
         if best is None:
             # Không gán được job j
             assignments.append({
-                "job": j,
+                "job": job_id,
                 "machine": None,
                 "plan": [],
                 "timespan": None,
@@ -161,7 +142,7 @@ def schedule_fcfs(config: Dict[str, Any], mode: str = "timespan") -> Dict[str, A
         machine_windows[m_best] = _apply_plan_to_windows(machine_windows[m_best], plan_best)
 
         assignments.append({
-            "job": j,
+            "job": job_id,
             "machine": m_best,
             "plan": plan_best,
             "timespan": timespan,
@@ -213,9 +194,8 @@ def _print_result(res: Dict[str, Any]):
             print(f"    timespan: {ts}, finish: {fin}, fragments: {fr}")
 
     print("Final windows per machine:")
-    for mi, wins in enumerate(res["final_windows"]):
-        compact = [[s, e] for (s, e) in wins]
-        print(f"  Machine {mi}: {compact}")
+    for machine_id, windows in res["final_windows"].items():
+        print(f"  Machine {machine_id}: {windows}")
 
 def main():
     parser = argparse.ArgumentParser(description="FCFS with best-fit across machines (DP per job).")
@@ -223,7 +203,7 @@ def main():
     parser.add_argument("--mode", type=str, default="timespan", choices=["timespan", "leftover"])
     args = parser.parse_args()
 
-    cfg = _load_config(args.config)
+    cfg = ReadJsonIOHandler(args.config).get_input()
     res = schedule_fcfs(cfg, mode=args.mode)
     _print_result(res)
 

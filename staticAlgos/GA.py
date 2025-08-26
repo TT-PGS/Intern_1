@@ -1,23 +1,21 @@
 import os
 import sys
-import json
 import argparse
 import random
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Optional
 from copy import deepcopy
 
-# ---------------------------------------------
-# Project import path (project root one level up)
-# ---------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-# Now we can import the DP helpers
+from base.model import SchedulingModel
+from base.io_handler import ReadJsonIOHandler
+
 from split_job.dp_single_job import (
     solve_min_timespan_cfg,
-    solve_feasible_leftover_rule_cfg,
+    solve_feasible_leftover_rule_cfg
 )
 
 # =============================================
@@ -42,27 +40,6 @@ class GAParams:
     mutation_rate_mach: float = 0.05  # probability per gene to mutate machine id
     elite: int = 2
     seed: Optional[int] = None
-
-# =============================================
-# Config loading
-# =============================================
-
-def _load_config(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
-    # Normalize time_windows keys: "0" -> 0, etc.
-    model = cfg.get("model", {})
-    tw = model.get("time_windows", {})
-    if isinstance(tw, dict):
-        normalized = {}
-        for k, v in tw.items():
-            try:
-                normalized[int(k)] = v
-            except ValueError:
-                raise ValueError(f"time_windows key '{k}' is not an int-like key")
-        model["time_windows"] = normalized
-        cfg["model"] = model
-    return cfg
 
 # =============================================
 # GA operators
@@ -128,16 +105,16 @@ def mutate_machines(machs: List[int], num_machines: int, rate: float) -> None:
 # Scheduling evaluation using DP per MACHINE (aggregate, then split to jobs)
 # =============================================
 
-def _sum_proc_time_for_machine(order: List[int], machines: List[int], processing_times: List[int], m: int) -> Tuple[int, List[int]]:
-    """Return (total_pt, jobs_on_m_in_order). The order among jobs is induced by global 'order'."""
-    jobs_on_m: List[int] = [j for j in order if machines[j] == m]
-    total = sum(processing_times[j] for j in jobs_on_m)
-    return total, jobs_on_m
+def _sum_proc_time_for_machine(order: List[int], machines: List[int], processing_times: List[int], machine_id: int) -> Tuple[int, List[int]]:
+    """Return (total_process_time, jobs_on_m_in_order). The order among jobs is induced by global 'order'."""
+    jobs_on_machine_id_in_order: List[int] = [j for j in order if machines[j] == machine_id]
+    total_process_time = sum(processing_times[j] for j in jobs_on_machine_id_in_order)
+    return total_process_time, jobs_on_machine_id_in_order
 
 
 def _evaluate_chromosome(
     chrom: Chromosome,
-    model: Dict[str, Any],
+    model: SchedulingModel,
     mode: str = "timespan",
     penalty: float = 10**9,
 ) -> Tuple[float, Dict[int, int], Dict[int, List[int]]]:
@@ -148,44 +125,44 @@ def _evaluate_chromosome(
         machine_finish_times (dict m -> finish_time)
         per_machine_job_order (dict m -> [job ids in order])
     """
-    num_machines = int(model["num_machines"])
-    processing_times: List[int] = list(model["processing_times"])
-    split_min = int(model["split_min"])
-    time_windows: Dict[int, List[List[int]]] = model["time_windows"]
+    num_machines = model.get_num_machines()
+    processing_times = model.get_processing_times()
+    split_min = model.get_split_min()
+    time_windows = model.get_time_windows()
 
-    machine_finish: Dict[int, int] = {}
-    per_m_jobs: Dict[int, List[int]] = {}
+    machine_finish = {}
+    jobs_per_machine = {}
 
-    for m in range(num_machines):
-        total_pt, jobs_on_m = _sum_proc_time_for_machine(
-            chrom.order, chrom.machines, processing_times, m
+    for machine_id in range(num_machines):
+        total_process_time, jobs_on_machine_id_in_order = _sum_proc_time_for_machine(
+            chrom.order, chrom.machines, processing_times, machine_id
         )
-        per_m_jobs[m] = jobs_on_m
-        if total_pt == 0:
-            machine_finish[m] = 0
+        jobs_per_machine[machine_id] = jobs_on_machine_id_in_order
+        if total_process_time == 0:
+            machine_finish[machine_id] = 0
             continue
 
-        windows_m = time_windows.get(m, [])
-        if not windows_m:
+        windows_of_machine_id = time_windows[machine_id]
+        if not windows_of_machine_id:
             # No capacity for any work on this machine
             return penalty, {}, {}
 
         # Check feasibility (if requested) then compute finish time
         if mode == "leftover":
-            feas, _ = solve_feasible_leftover_rule_cfg(total_pt, windows_m, split_min)
-            if not feas:
+            feasible, _ = solve_feasible_leftover_rule_cfg(total_process_time, windows_of_machine_id, split_min)
+            if not feasible:
                 return penalty, {}, {}
             # If feasible, also get the finish time via min_timespan solver (for comparison)
-            finish, _ = solve_min_timespan_cfg(total_pt, windows_m, split_min)
+            finish, _ = solve_min_timespan_cfg(total_process_time, windows_of_machine_id, split_min)
         else:
-            finish, _ = solve_min_timespan_cfg(total_pt, windows_m, split_min)
+            finish, _ = solve_min_timespan_cfg(total_process_time, windows_of_machine_id, split_min)
 
         if finish is None:
             return penalty, {}, {}
-        machine_finish[m] = int(finish)
+        machine_finish[machine_id] = int(finish)
 
     makespan = max(machine_finish.values()) if machine_finish else 0
-    return float(makespan), machine_finish, per_m_jobs
+    return float(makespan), machine_finish, jobs_per_machine
 
 # =============================================
 # Reconstruct per-job segments by greedy packing across machine windows
@@ -197,6 +174,7 @@ def _pack_jobs_into_windows(
     processing_times: List[int],
     windows: List[List[int]],
 ) -> List[Tuple[int, int, int]]:
+    #TODO: change it to DP-based packing or new heuristic
     """Greedy earliest-fit packing of jobs into absolute windows (start,end).
 
     Returns list of (job_id, start, end) segments for this machine.
@@ -209,21 +187,21 @@ def _pack_jobs_into_windows(
 
     segments: List[Tuple[int, int, int]] = []
 
-    for j in jobs_order:
-        remain = int(processing_times[j])
-        for idx, (ws, we) in enumerate(windows_sorted):
+    for job in jobs_order:
+        remain = processing_times[job]
+        for idx, (window_start, window_end) in enumerate(windows_sorted):
             if remain <= 0:
                 break
             cur = cursors[idx]
-            if cur >= we:
+            if cur >= window_end:
                 continue  # window full
-            avail = we - cur
-            if avail <= 0:
+            available_window = window_end - cur
+            if available_window <= 0:
                 continue
-            use = min(avail, remain)
+            use = min(available_window, remain)
             seg_start = cur
             seg_end = cur + use
-            segments.append((j, seg_start, seg_end))
+            segments.append((job, seg_start, seg_end))
             cursors[idx] = seg_end
             remain -= use
         # If remain > 0 here, windows were insufficient; this should not happen if DP said feasible
@@ -233,28 +211,16 @@ def _pack_jobs_into_windows(
 # GA main loop
 # =============================================
 
-def run_ga(config: Dict[str, Any], params: GAParams, mode: str = "timespan") -> Dict[str, Any]:
+def run_ga(config: SchedulingModel, params: GAParams, mode: str = "timespan") -> Dict[str, Any]:
     if params.seed is not None:
         random.seed(params.seed)
 
-    # --- normalize model & time_windows keys to int ---
-    model_in = config["model"]
-    model = deepcopy(model_in)
+    model = deepcopy(config)
 
-    tw_raw = model["time_windows"]
-    # Chuyển key -> int, và đảm bảo giá trị là list[int, int]
-    time_windows = {
-        int(k): [[int(a), int(b)] for (a, b) in v]
-        for k, v in tw_raw.items()
-    }
-    model["time_windows"] = time_windows
-    # Đồng bộ lại num_machines nếu cần
-    model["num_machines"] = int(model.get("num_machines", len(time_windows)))
-
-    num_jobs = int(model["num_jobs"])
-    num_machines = int(model["num_machines"])
-    processing_times: List[int] = list(model["processing_times"])
-    time_windows: Dict[int, List[List[int]]] = model["time_windows"]
+    num_jobs = model.get_num_jobs()
+    num_machines = model.get_num_machines()
+    processing_times = model.get_processing_times()
+    time_windows = model.get_time_windows()
 
     # --- initialize population ---
     def random_chrom() -> Chromosome:
@@ -274,7 +240,7 @@ def run_ga(config: Dict[str, Any], params: GAParams, mode: str = "timespan") -> 
         meta_cache.append((mf, pmj))
 
     # --- evolution ---
-    for gen in range(params.generations):
+    for generation in range(params.generations):
         # Elitism
         ranked = sorted(zip(population, fitness, meta_cache), key=lambda x: x[1])
         new_pop: List[Chromosome] = [ranked[i][0] for i in range(min(params.elite, len(ranked)))]
@@ -322,14 +288,14 @@ def run_ga(config: Dict[str, Any], params: GAParams, mode: str = "timespan") -> 
 
     # Reconstruct segments for report (visualization only)
     per_machine_segments: Dict[int, List[Tuple[int, int, int]]] = {}
-    for m in range(num_machines):
-        jobs_on_m = best_per_m_jobs.get(m, [])
+    for machine_id in range(num_machines):
+        jobs_on_m = best_per_m_jobs[machine_id]
         if not jobs_on_m:
-            per_machine_segments[m] = []
+            per_machine_segments[machine_id] = []
             continue
-        windows_m = time_windows.get(m, [])
-        segs = _pack_jobs_into_windows(jobs_on_m, processing_times, windows_m)
-        per_machine_segments[m] = segs
+        windows_m = time_windows[machine_id]
+        segments = _pack_jobs_into_windows(jobs_on_m, processing_times, windows_m)
+        per_machine_segments[machine_id] = segments
 
     result = {
         "makespan": int(best_fit),
@@ -346,8 +312,8 @@ def run_ga(config: Dict[str, Any], params: GAParams, mode: str = "timespan") -> 
 # =============================================
 
 def _ascii_gantt(per_machine_segments: Dict[int, List[Tuple[int, int, int]]],
-                 time_windows: Dict[int, List[List[int]]],
-                 width_limit: int = 120) -> str:
+                time_windows: Dict[int, List[List[int]]],
+                width_limit: int = 120) -> str:
     """Draw a minimal ASCII Gantt. Each machine on one row.
     We compute the horizon from its windows. If the horizon is too large, we scale down.
     """
@@ -391,7 +357,7 @@ def _ascii_gantt(per_machine_segments: Dict[int, List[Tuple[int, int, int]]],
 # Pretty printing result
 # =============================================
 
-def print_summary(result: Dict[str, Any], model: Dict[str, Any]) -> None:
+def print_summary(result: Dict[str, Any], model: SchedulingModel) -> None:
     print("==== GA Result ====")
     print(f"Makespan (timespan): {result['makespan']}")
     print(f"Best order: {result['order']}")
@@ -415,7 +381,7 @@ def print_summary(result: Dict[str, Any], model: Dict[str, Any]) -> None:
 
     # Gantt (ASCII)
     print("\nASCII Gantt (simple):")
-    print(_ascii_gantt(result["per_machine_segments"], model["time_windows"]))
+    print(_ascii_gantt(result["per_machine_segments"], model.get_time_windows()))
 
 # =============================================
 # CLI
@@ -435,7 +401,7 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     args = parser.parse_args()
 
-    cfg = _load_config(args.config)
+    cfg = ReadJsonIOHandler(args.config).get_input()
     params = GAParams(
         pop_size=args.pop_size,
         generations=args.generations,
@@ -448,7 +414,7 @@ def main():
     )
 
     result = run_ga(cfg, params, mode=args.mode)
-    print_summary(result, cfg["model"])
+    print_summary(result, cfg)
 
 if __name__ == "__main__":
     main()

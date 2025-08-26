@@ -3,11 +3,19 @@
   "model": {
     "num_jobs": 2,
     "num_machines": 2,
-    "processing_times": [5, 5],
-    "split_min": 2,
+    "processing_times": [5, 6],
+    "split_min": 3,
     "time_windows": {
-      "0": [[0, 5], [6, 10]],
-      "1": [[1, 4], [5, 9]]
+      "0": [
+        [0, 5],
+        [6, 10],
+        [11, 16]
+      ],
+      "1": [
+        [1, 4],
+        [5, 9],
+        [11, 16]
+      ]
     }
   }
 }

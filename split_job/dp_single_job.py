@@ -1,16 +1,8 @@
 import json
 import os
 from typing import List, Tuple, Optional, Dict, Any
-from typing import List, Tuple, Optional
+from base.model import SchedulingModel
 from base.io_handler import ReadJsonIOHandler
-
-def get_windows_from_config(config: Dict[str, Any], machine_id: str) -> List[List[int]]:
-    """Lấy danh sách time windows [[start,end],...] của 1 máy từ config."""
-    return config["model"]["time_windows"].get(machine_id, [])
-
-def get_all_windows_from_config(config: Dict[str, Any]) -> List[List[List[int]]]:
-    """Lấy danh sách time windows [[start,end],...] của tất cả các máy từ config."""
-    return [get_windows_from_config(config, str(m)) for m in range(config["model"]["num_machines"])]
 
 def solve_min_timespan_cfg(
     total_processing_time: int,
@@ -105,7 +97,6 @@ def solve_min_timespan_cfg(
                     remain = next_remain
                     idx += 1
                 best_timespan, best_plan = timespan, plan
-
     return (best_timespan, best_plan) if best_plan else (None, None)
 
 
@@ -201,25 +192,29 @@ def solve_feasible_leftover_rule_cfg(
     finish_time = max(end for (_, _, end) in alloc) if alloc else 0
     return finish_time, alloc
 
-
+def print_list(prefix: str, lst: list) -> None:
+    print(prefix)
+    for item in lst:
+        print(f"{item}\n")
 
 if __name__ == "__main__":
-    # Xác định đường dẫn file JSON config
     config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "splittable_jobs.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
+    # config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "input_10_2_4_1.json")
+    config = ReadJsonIOHandler(config_path).get_input()
 
-    split_min = config["model"]["split_min"]
+    total_processing_time_job_0 = config.get_job_size(0)
+    windows0 = config.get_time_windows()[0]
 
-    total_processing_time_job_0 = config["model"]["processing_times"][0]
-    windows0 = get_windows_from_config(config, "0")
+    print("split_min:", config.get_split_min())
 
     print("Machine 0 windows:", windows0)
-    print("Min timespan:", solve_min_timespan_cfg(total_processing_time_job_0, windows0, split_min))
-    print("Feasible leftover rule:", solve_feasible_leftover_rule_cfg(total_processing_time_job_0, windows0, split_min))
+    print("Job size:", total_processing_time_job_0)
+    print("Min timespan:", solve_min_timespan_cfg(total_processing_time_job_0, windows0, config.get_split_min()))
+    print("Feasible leftover rule:", solve_feasible_leftover_rule_cfg(total_processing_time_job_0, windows0, config.get_split_min()))
 
-    total_processing_time_job_1 = config["model"]["processing_times"][1]
-    windows1 = get_windows_from_config(config, "1")
-    print("Machine 1 windows:", windows1)
-    print("Min timespan:", solve_min_timespan_cfg(total_processing_time_job_1, windows1, split_min))
-    print("Feasible leftover rule:", solve_feasible_leftover_rule_cfg(total_processing_time_job_1, windows1, split_min))
+    # total_processing_time_job_1 = config.get_job_size(1)
+    # windows1 = config.get_time_windows()["1"]
+    # print("Machine 1 windows:", windows1)
+    # print("Job size:", total_processing_time_job_1)
+    # print("Min timespan:", solve_min_timespan_cfg(total_processing_time_job_1, windows1, config.get_split_min()))
+    # print("Feasible leftover rule:", solve_feasible_leftover_rule_cfg(total_processing_time_job_1, windows1, config.get_split_min()))

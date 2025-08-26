@@ -18,17 +18,17 @@ class ReadJsonIOHandler(IOHandler):
 
     def get_input(self) -> SchedulingModel:
         if not self.json_path:
-            raise ValueError("⚠️ 'self.json_path' not found.")
+            raise ValueError("Invalid json file path")
 
         try:
             with open(self.json_path, "r") as f:
                 data = json.load(f)
         except Exception as e:
-            raise IOError(f"❌ Error reading file JSON: {e}")
+            raise IOError(f"Error reading file JSON: {e}")
 
         model_data = data.get("model")
         if not model_data:
-            raise ValueError("❌ key 'model' not found in file JSON.")
+            raise ValueError("key 'model' not found in file JSON.")
 
         # Convert key of time_windows from str to int
         time_windows_raw = model_data.get("time_windows", {})

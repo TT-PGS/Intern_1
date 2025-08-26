@@ -15,14 +15,26 @@ class SchedulingModel:
         self.split_min = split_min
         self.time_windows = time_windows
 
+    def get_num_jobs(self) -> int:
+        return self.num_jobs
+    
+    def get_num_machines(self) -> int:
+        return self.num_machines
+
+    def get_processing_times(self) -> List[int]:
+        return self.processing_times
+
+    def get_split_min(self) -> int:
+        return self.split_min
+
     def get_job_size(self, job_id: int) -> int:
         return self.processing_times[job_id]
 
-    def get_machine_windows(self, machine_id: int) -> list:
+    def get_machine_windows(self, machine_id: int) -> List[List[int]]:
         return self.time_windows.get(machine_id, [])
 
-    def get_all_windows(self) -> List[List[List[int]]]:
-        return list(self.time_windows.values())
+    def get_time_windows(self) -> Dict[int, List[List[int]]]:
+        return self.time_windows
 
     def describe(self):
         return {
