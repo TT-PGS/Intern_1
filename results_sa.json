@@ -1,0 +1,183 @@
+{
+  "algorithm": "sa",
+  "mode": "timespan",
+  "best_order": [
+    1,
+    2,
+    4,
+    6,
+    3,
+    5,
+    8,
+    7,
+    0,
+    9
+  ],
+  "makespan": 66,
+  "assignments": [
+    {
+      "job": 1,
+      "machine": 0,
+      "segments": [
+        [
+          0,
+          0,
+          6
+        ]
+      ],
+      "timespan": 6,
+      "finish": 6,
+      "fragments": 1
+    },
+    {
+      "job": 2,
+      "machine": 1,
+      "segments": [
+        [
+          0,
+          0,
+          4
+        ],
+        [
+          1,
+          4,
+          8
+        ],
+        [
+          2,
+          8,
+          12
+        ]
+      ],
+      "timespan": 12,
+      "finish": 12,
+      "fragments": 3
+    },
+    {
+      "job": 4,
+      "machine": 0,
+      "segments": [
+        [
+          0,
+          6,
+          11
+        ]
+      ],
+      "timespan": 5,
+      "finish": 11,
+      "fragments": 1
+    },
+    {
+      "job": 6,
+      "machine": 0,
+      "segments": [
+        [
+          0,
+          11,
+          34
+        ]
+      ],
+      "timespan": 23,
+      "finish": 34,
+      "fragments": 1
+    },
+    {
+      "job": 3,
+      "machine": 1,
+      "segments": [
+        [
+          0,
+          12,
+          17
+        ]
+      ],
+      "timespan": 5,
+      "finish": 17,
+      "fragments": 1
+    },
+    {
+      "job": 5,
+      "machine": 1,
+      "segments": [
+        [
+          0,
+          17,
+          21
+        ]
+      ],
+      "timespan": 4,
+      "finish": 21,
+      "fragments": 1
+    },
+    {
+      "job": 8,
+      "machine": 1,
+      "segments": [
+        [
+          0,
+          21,
+          43
+        ]
+      ],
+      "timespan": 22,
+      "finish": 43,
+      "fragments": 1
+    },
+    {
+      "job": 7,
+      "machine": 0,
+      "segments": [
+        [
+          0,
+          34,
+          52
+        ]
+      ],
+      "timespan": 18,
+      "finish": 52,
+      "fragments": 1
+    },
+    {
+      "job": 0,
+      "machine": 1,
+      "segments": [
+        [
+          0,
+          43,
+          65
+        ]
+      ],
+      "timespan": 22,
+      "finish": 65,
+      "fragments": 1
+    },
+    {
+      "job": 9,
+      "machine": 0,
+      "segments": [
+        [
+          0,
+          52,
+          66
+        ]
+      ],
+      "timespan": 14,
+      "finish": 66,
+      "fragments": 1
+    }
+  ],
+  "final_windows": [
+    [
+      [
+        66,
+        107070
+      ]
+    ],
+    [
+      [
+        65,
+        107073
+      ]
+    ]
+  ]
+}
