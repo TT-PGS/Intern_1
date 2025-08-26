@@ -43,7 +43,7 @@ def _arrival_order(num_jobs: int) -> List[int]:
 
 def _apply_plan_to_windows(windows: List[List[int]], plan: List[Tuple[int,int,int]]) -> List[List[int]]:
     """
-    windows: list các [start, end] (hoặc [start, end) tuỳ bạn thống nhất; dưới đây coi như end là thời điểm bắt đầu của slot kế tiếp)
+    windows: list các [start, end]
     plan: list các (win_idx, seg_start, seg_end) với thời gian tuyệt đối (cùng hệ quy chiếu với windows)
 
     Trả về windows mới sau khi trừ đi các đoạn [seg_start, seg_end].
