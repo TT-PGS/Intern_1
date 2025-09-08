@@ -1,5 +1,3 @@
-# agents/dqn_agent.py
-from typing import List, Tuple, Any
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -7,10 +5,11 @@ from collections import namedtuple
 
 from .q_net import QNet
 from .replay_buffer import ReplayBuffer
+from base.agent_base import AgentBase
 
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
 
-class DQNAgent:
+class DQNAgent(AgentBase):
     def __init__(
         self,
         state_dim: int,
@@ -20,8 +19,8 @@ class DQNAgent:
         epsilon: float = 1.0,
         buffer_size: int = 10000,
         batch_size: int = 64,
-        target_update: str = "hard",   # "hard" | "soft"
-        tau: float = 0.005,            # dùng cho soft update
+        target_update: str = "hard",
+        tau: float = 0.005,
     ):
         self.action_dim = int(action_dim)
         self.gamma = float(gamma)
@@ -43,7 +42,7 @@ class DQNAgent:
         self.replay_buffer = ReplayBuffer(buffer_size)
 
     # --------------------------------------------------------------------- #
-    #  Action selection: epsilon-greedy on Q(s,·) with optional action mask  #
+    #  Action selection: epsilon-greedy on Q(s,·) with optional action mask #
     # --------------------------------------------------------------------- #
     def select_action(self, state, mask=None) -> int:
         """

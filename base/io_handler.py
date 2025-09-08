@@ -83,12 +83,12 @@ class ReadJsonIOHandler(IOHandler):
         }
 
     def show_output(self, result: dict):
-        print(f"🎯 Total Reward: {result['total_reward']}")
-        print(f"📋 Job Assignments: {result.get('job_assignments', {})}")
+        print(f"Total Reward: {result['total_reward']}")
+        print(f"Job Assignments: {result.get('job_assignments', {})}")
         stats = self.analyze_schedule(result.get("job_assignments", {}))
 
-        print(f"\n📊 Schedule Summary:")
-        print(f"🕒 Total Makespan: {stats['makespan']}")
+        print(f"\nSchedule Summary:")
+        print(f"Total Makespan: {stats['makespan']}")
         for job_id, info in stats['jobs'].items():
             print(f"  - Job {job_id}: {info['num_chunks']} chunks, timespan {info['timespan']} from {info['start']} to {info['end']}")
 

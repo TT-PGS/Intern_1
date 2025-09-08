@@ -4,6 +4,74 @@ from typing import List, Tuple, Optional, Dict, Any
 from base.model import SchedulingModel
 from base.io_handler import ReadJsonIOHandler
 
+def assign_job_to_machine(
+    total_processing_time: int,
+    windows_list: List[List[int]],
+    split_min: int
+) -> Tuple[Optional[int], Optional[List[Tuple[int, int, int]]]]:
+    """Assign job_id to machine_id following the paper
+
+    Parameters
+    ----------
+    total_processing_time : int
+        processing time of job
+    windows_list : List[List[int]]
+        windows of machine
+    split_min : int
+        split min of job
+
+    Returns
+    -------
+    Tuple[Optional[int], Optional[List[Tuple[int, int, int]]]]
+        (best_timespan, best_plan)
+        best_timespan: None if not feasible
+        best_plan: None if not feasible
+    """
+    job_remaing = total_processing_time
+    plan = []
+    for i, (start, end) in enumerate(windows_list):
+        if job_remaing <= 0:
+            break
+        cap = end - start
+        if job_remaing < 2*split_min:
+            if job_remaing <= cap:
+                plan.append((i, start, start + job_remaing))
+                job_remaing = 0
+                break
+            else:
+                continue
+        
+        if cap < split_min:
+            continue
+        if job_remaing <= cap - split_min:
+            plan.append((i, start, start + job_remaing))
+            job_remaing = 0
+            break
+        elif job_remaing > cap - split_min:
+            if job_remaing <= cap:
+                plan.append((i, start, start + job_remaing - split_min))
+                job_remaing = split_min
+                continue
+            elif job_remaing > cap:
+                if job_remaing - cap >= split_min:
+                    plan.append((i, start, end))
+                    job_remaing -= cap
+                    continue
+                elif job_remaing - cap < split_min:
+                    if cap >= 2*split_min:
+                        plan.append((i, start, end - split_min))
+                        job_remaing = job_remaing - (cap - split_min)
+                        continue
+                    elif cap < 2*split_min:
+                        continue
+    
+    if job_remaing > 0:
+        print("ERROR: Not feasible to assign job to machine")
+        return None, None
+    else:
+        timespan = max(end for (_, _, end) in plan) - min(start for (_, start, _) in plan)
+        return timespan, plan
+    
 def solve_min_timespan_cfg(
     total_processing_time: int,
     windows_list: List[List[int]],
@@ -110,8 +178,8 @@ def solve_feasible_leftover_rule_cfg(
     với luật leftover: nếu chỉ dùng một phần window thì phần dư phải >= split_min.
 
     Chính sách chọn k:
-      - Ưu tiên dùng hết window (k = cap).
-      - Nếu partial: duyệt từ lớn xuống nhỏ để ưu tiên mảnh lớn, ít mảnh.
+        - Ưu tiên dùng hết window (k = cap).
+        - Nếu partial: duyệt từ lớn xuống nhỏ để ưu tiên mảnh lớn, ít mảnh.
 
     Parameters
     ----------
@@ -198,8 +266,8 @@ def print_list(prefix: str, lst: list) -> None:
         print(f"{item}\n")
 
 if __name__ == "__main__":
-    config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "splittable_jobs.json")
-    # config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "input_10_2_4_1.json")
+    # config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "splittable_jobs.json")
+    config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "input_10_2_4_1.json")
     config = ReadJsonIOHandler(config_path).get_input()
 
     total_processing_time_job_0 = config.get_job_size(0)
@@ -211,6 +279,7 @@ if __name__ == "__main__":
     print("Job size:", total_processing_time_job_0)
     print("Min timespan:", solve_min_timespan_cfg(total_processing_time_job_0, windows0, config.get_split_min()))
     print("Feasible leftover rule:", solve_feasible_leftover_rule_cfg(total_processing_time_job_0, windows0, config.get_split_min()))
+    print("Timespan:", assign_job_to_machine(total_processing_time_job_0, windows0, config.get_split_min()))    
 
     # total_processing_time_job_1 = config.get_job_size(1)
     # windows1 = config.get_time_windows()["1"]

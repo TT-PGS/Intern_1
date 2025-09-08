@@ -19,7 +19,8 @@ from base.model import SchedulingModel
 
 from split_job.dp_single_job import (
     solve_min_timespan_cfg,
-    solve_feasible_leftover_rule_cfg
+    solve_feasible_leftover_rule_cfg,
+    assign_job_to_machine
 )
 
 # ----------------------- util -----------------------
@@ -78,20 +79,24 @@ def _evaluate_assignment(mode: str,
         Với 'leftover' ta gọi solve_feasible_leftover_rule_cfg (đồng nhất cách xử lý).
     """
     if mode == "timespan":
-        obj, plan = solve_min_timespan_cfg(ptime, windows, split_min)
-        if obj is None or not plan:
+        timespan, plan = solve_min_timespan_cfg(ptime, windows, split_min)
+        if timespan is None or not plan:
             return None, None, None, None
-        finish = max(seg[2] for seg in plan)  # seg = (win_idx, start, end)
-        timespan = obj
+        finish = max(seg[2] for seg in plan)
         fragments = len(plan)
         return finish, plan, timespan, fragments
     elif mode == "leftover":
-        obj, plan = solve_feasible_leftover_rule_cfg(ptime, windows, split_min)
-        if obj is None or not plan:
+        timespan, plan = solve_feasible_leftover_rule_cfg(ptime, windows, split_min)
+        if timespan is None or not plan:
             return None, None, None, None
         finish = max(seg[2] for seg in plan)
-        # Với leftover mode, obj có thể là bool/0-1 hoặc thời lượng còn dư; ta vẫn đánh giá theo finish trước.
-        timespan = ptime  # placeholder (hoặc đặt = sum(end-start) theo plan)
+        fragments = len(plan)
+        return finish, plan, timespan, fragments
+    elif mode == "assign":
+        timespan, plan = assign_job_to_machine(ptime, windows, split_min)
+        if timespan is None or not plan:
+            return None, None, None, None
+        finish = max(seg[2] for seg in plan)
         fragments = len(plan)
         return finish, plan, timespan, fragments
     else:
@@ -99,7 +104,7 @@ def _evaluate_assignment(mode: str,
 
 # ----------------------- core FCFS -----------------------
 
-def schedule_fcfs(cfg: SchedulingModel, mode: str = "timespan") -> Dict[str, Any]:
+def schedule_fcfs(cfg: SchedulingModel, mode: str = "assign") -> Dict[str, Any]:
     processing_times = cfg.get_processing_times()
     number_of_jobs = cfg.get_num_jobs()
     split_min = cfg.get_split_min()

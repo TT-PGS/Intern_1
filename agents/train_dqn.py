@@ -1,18 +1,16 @@
-# agents/train_dqn.py
 import os
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 import random
 import numpy as np
 import torch
 
 from agents.agent_factory import create_agent
-from envs.simple_split_env import SimpleSplitSchedulingEnv, SchedulingModel
+from envs.simple_split_env import SimpleSplitSchedulingEnv
 from base.io_handler import ReadJsonIOHandler
 from base.runner import run_episode
 
 # ---------------- helpers ----------------
-
-def _set_seed(seed: Optional[int] = None) -> None:
+def set_seed(seed: Optional[int] = None) -> None:
     if seed is None:
         return
     random.seed(seed)
@@ -22,7 +20,6 @@ def _set_seed(seed: Optional[int] = None) -> None:
         torch.cuda.manual_seed_all(seed)
 
 # -------------- training -----------------
-
 def train_dqn(
     model_config_path: str,
     model_save_path: str = "qnet.pt",
@@ -32,7 +29,7 @@ def train_dqn(
     """
     Train DQN + chọn model theo eval greedy (ε=0) sau mỗi episode.
     """
-    _set_seed(seed)
+    set_seed(seed)
 
     io = ReadJsonIOHandler(model_config_path)
     model_obj = io.get_input()

@@ -54,10 +54,22 @@ def maybe_write_out(out_path: str, payload: dict):
         json.dump(payload, f, indent=2)
     print(f"\nSaved result to: {out_path}")
 
+def log_info(func):
+    import time
+    """Decorator để log thông tin hàm gọi."""
+    def wrapper(*args, **kwargs):
+        print(f"Calling function: {func.__name__}")
+        timestart = time.time()
+        result = func(*args, **kwargs)
+        print(f"Function {func.__name__} completed. Elapsed time: {time.time() - timestart:.2f} seconds")
+        return result
+    return wrapper
+
 # ---------------------------
 # Main
 # ---------------------------
 
+@log_info
 def main():
     parser = argparse.ArgumentParser(description="Unified entrypoint: RL (random/DQN) + static (FCFS/SA/GA)")
     # Common
@@ -67,12 +79,13 @@ def main():
                         help="Path to JSON config containing 'model'")
     parser.add_argument("--out", type=str, default="",
                         help="Optional path to write JSON result (assignments, makespan, etc.)")
-    parser.add_argument("--split-mode", type=str, default="timespan", choices=["timespan", "leftover"],
+    parser.add_argument("--split-mode", type=str, default="assign", choices=["timespan", "leftover", "assign"],
                         help="DP mode for splitting jobs when assigning to machines")
 
     # RL options
     parser.add_argument("--dqn-episodes", type=int, default=10, help="DQN training episodes")
     parser.add_argument("--dqn-model", type=str, default="qnet.pt", help="Path to save/load DQN weights")
+    parser.add_argument("--dqn-train", action="store_true", help="Enable DQN training")
 
     # SA options
     parser.add_argument("--sa-Tmax", type=float, default=500.0)
@@ -105,28 +118,30 @@ def main():
         raise ValueError(f"Unknown mode: {mode}. Use one of: dqn, fcfs, sa, ga.")
 
     # ---------------- RL branch ----------------
-    if mode == "dqn":
+    if mode == "dqn" or mode == "all":
         env = SimpleSplitSchedulingEnv(cfg)
         agent_name = mode
 
-        model_path = args.dqn_model
-        print("\nTraining DQN agent...")
-        train_dqn(io_json_input_file_path, model_save_path=model_path, episodes=args.dqn_episodes)
+        model_file_path = args.dqn_model
+        enable_training = args.dqn_train
+
+        if enable_training or not os.path.isfile(model_file_path):
+            print("\nTraining DQN agent...")
+            train_dqn(io_json_input_file_path, model_save_path=model_file_path, episodes=args.dqn_episodes)
 
         print("\nLoading trained model and running final evaluation...")
         agent = create_agent(agent_name, env.state_dim(), env.action_dim())
-        agent.q_net.load_state_dict(torch.load(model_path))
+        agent.q_net.load_state_dict(torch.load(model_file_path))
         agent.q_net.eval()
         if hasattr(agent, "epsilon"):
             agent.epsilon = 0.0  # disable exploration for eval
 
         io = ReadJsonIOHandler(io_json_input_file_path)
-        result = run_episode(env, agent)
+        result = run_episode(env, agent, train=False)
         io.show_output(result)
-        return
 
     # ---------------- Static algorithms ----------------
-    if mode == "fcfs":
+    if mode == "fcfs" or mode == "all":
         print("\nRunning FCFS (best-fit across machines, DP per job)...")
         res = schedule_fcfs(cfg, mode=args.split_mode)
         print(f"Mode: {args.split_mode}")
@@ -141,9 +156,8 @@ def main():
             "final_windows": res["final_windows"],
         }
         maybe_write_out(args.out, payload)
-        return
 
-    if mode == "sa":
+    if mode == "sa" or mode == "all":
         print("\nRunning SA ...")
         res = schedule_sa_config(
             cfg,
@@ -176,9 +190,8 @@ def main():
             "final_windows": res.get("final_windows", []),
         }
         maybe_write_out(args.out, payload)
-        return
 
-    if mode == "ga":
+    if mode == "ga" or mode == "all":
         print("\nRunning GA ...")
         params = GAParams(
             pop_size=args.ga_pop,
@@ -243,7 +256,6 @@ def main():
             "per_machine_segments": ga_res["per_machine_segments"],
         }
         maybe_write_out(args.out, payload)
-        return
 
 
 if __name__ == "__main__":

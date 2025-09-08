@@ -2,26 +2,17 @@ import gym
 import numpy as np
 from typing import Tuple
 from base.model import SchedulingModel
-from split_job.dp_single_job import solve_min_timespan_cfg, solve_feasible_leftover_rule_cfg
+from split_job.dp_single_job import solve_min_timespan_cfg, solve_feasible_leftover_rule_cfg, assign_job_to_machine
 
 class SimpleSplitSchedulingEnv(gym.Env):
-    def __init__(self, model: SchedulingModel, mode: str = "timespan", verbose: bool = False):
+    def __init__(self, model: SchedulingModel, mode: str = "assign", verbose: bool = False):
         super(SimpleSplitSchedulingEnv, self).__init__()
-        if isinstance(model, dict):
-            tw = {int(k): [[int(a), int(b)] for (a, b) in v] for k, v in model["time_windows"].items()}
-            model = SchedulingModel(
-                num_jobs=int(model["num_jobs"]),
-                num_machines=int(model["num_machines"]),
-                processing_times=[int(x) for x in model["processing_times"]],
-                split_min=int(model["split_min"]),
-                time_windows=tw,
-            )
         self.model = model
-        self.num_jobs = model.num_jobs
-        self.num_machines = model.num_machines
-        self.processing_times = model.processing_times
-        self.time_windows = model.time_windows
-        self.split_min = model.split_min
+        self.num_jobs = model.get_num_jobs()
+        self.num_machines = model.get_num_machines()
+        self.processing_times = model.get_processing_times()
+        self.time_windows = model.get_time_windows()
+        self.split_min = model.get_split_min()
         self.current_makespan = 0
 
         self.jobs_remaining = []
@@ -40,9 +31,9 @@ class SimpleSplitSchedulingEnv(gym.Env):
         self.machines = [0] * self.num_machines
         self.job_assignments = {}
         self.done = False
-        return self._get_state()
+        return self.get_state()
 
-    def _get_state(self) -> np.ndarray:
+    def get_state(self) -> np.ndarray:
         return np.array(self.jobs_remaining + self.machines, dtype=np.float32)
 
     def render(self, mode="human"):
@@ -51,7 +42,6 @@ class SimpleSplitSchedulingEnv(gym.Env):
     def action_space_sample(self) -> int:
         return self.action_space.sample()
 
-    # thêm (nếu chưa có)
     def state_dim(self) -> int:
         return int(self.observation_space.shape[0])
 
@@ -73,7 +63,7 @@ class SimpleSplitSchedulingEnv(gym.Env):
             for machine_id in range(self.num_machines):
                 windows = self.time_windows[machine_id]
                 remaining_time = self.jobs_remaining[job_id]
-                result = solve_min_timespan_cfg(
+                result = assign_job_to_machine(
                     total_processing_time=remaining_time,
                     windows_list=windows,
                     split_min=self.split_min
@@ -83,17 +73,17 @@ class SimpleSplitSchedulingEnv(gym.Env):
                     mask[idx] = 1
         return mask
 
-    def _update_windows(self, machine_id: int, start: int, end: int):
+    def update_windows(self, machine_id: int, start: int, end: int):
         new_windows = []
         for w_start, w_end in self.time_windows[machine_id]:
             if end <= w_start or start >= w_end:
                 new_windows.append((w_start, w_end))
             elif start == w_start and end == w_end:
-                continue  # dùng hết window → bỏ
+                continue
             elif start == w_start:
-                new_windows.append((end, w_end))  # còn lại phía sau
+                new_windows.append((end, w_end))
             else:
-                raise ValueError("❌ Invalid DP: tried to assign in the middle of window, which shouldn't happen.")
+                raise ValueError("Invalid DP: tried to assign in the middle of window, which shouldn't happen.")
         self.time_windows[machine_id] = new_windows
 
     def step(self, action: int) -> tuple[np.ndarray, float, bool, dict]:
@@ -102,41 +92,40 @@ class SimpleSplitSchedulingEnv(gym.Env):
 
         # Nếu job đã xong → phạt nhẹ
         if self.jobs_remaining[job_id] <= 0:
-            return self._get_state(), -0.1, self.done, {}
+            return self.get_state(), -0.1, self.done, {}
 
         # Lấy thời lượng còn lại và time windows của máy
         remaining_time = self.jobs_remaining[job_id]
         windows = self.time_windows[machine_id]
 
         # Gọi DP để chia job
-        result = solve_min_timespan_cfg(
+        if self.mode == "timespan":
+            finish_time, chunks = solve_min_timespan_cfg(
                 total_processing_time=remaining_time,
                 windows_list=windows,
                 split_min=self.split_min
-        )
+            )
+        elif self.mode == "leftover":
+            finish_time, chunks = solve_feasible_leftover_rule_cfg(
+                total_processing_time=remaining_time,
+                windows_list=windows,
+                split_min=self.split_min
+            )
+        else:  # assign
+            finish_time, chunks = assign_job_to_machine(
+                total_processing_time=remaining_time,
+                windows_list=windows,
+                split_min=self.split_min
+            )
 
-        # if self.mode == "timespan":
-        #     result = solve_min_timespan_cfg(
-        #         total_processing_time=remaining_time,
-        #         windows_list=windows,
-        #         split_min=self.split_min
-        #     )
-        # else:
-        #     result = solve_feasible_leftover_rule_cfg(
-        #         total_processing_time=remaining_time,
-        #         windows_list=windows,
-        #         split_min=self.split_min
-        #     )
-
-        if result[0] is None or result[1] is None:
+        if finish_time is None or chunks is None:
             # Không chia được → phạt nhẹ
-            return self._get_state(), -0.1, self.done, {}
+            return self.get_state(), -0.1, self.done, {}
 
-        finish_time, chunks = result
         # Cập nhật môi trường theo chunks
         for window_index, start, end in chunks:
             self.job_assignments.setdefault(job_id, {}).setdefault(machine_id, []).append((start, end))
-            self._update_windows(machine_id, start, end)
+            self.update_windows(machine_id, start, end)
 
         self.jobs_remaining[job_id] = 0
         self.machines[machine_id] = max(self.machines[machine_id], finish_time)
@@ -150,6 +139,6 @@ class SimpleSplitSchedulingEnv(gym.Env):
         # Kiểm tra kết thúc
         if all(t <= 0 for t in self.jobs_remaining):
             self.done = True
-            return self._get_state(), reward, True, {}
+            return self.get_state(), reward, True, {}
 
-        return self._get_state(), reward, False, {}
+        return self.get_state(), reward, False, {}

@@ -30,7 +30,8 @@ from base.model import SchedulingModel
 from base.io_handler import ReadJsonIOHandler
 from split_job.dp_single_job import (
     solve_min_timespan_cfg,
-    solve_feasible_leftover_rule_cfg
+    solve_feasible_leftover_rule_cfg,
+    assign_job_to_machine
 )
 
 # -----------------------------------------------------------------------------
@@ -84,6 +85,8 @@ def _evaluate_job_on_machine(
         obj, plan = solve_min_timespan_cfg(processing_time, windows_of_machine, split_min)
     elif mode == "leftover":
         obj, plan = solve_feasible_leftover_rule_cfg(processing_time, windows_of_machine, split_min)
+    elif mode == "assign":
+        obj, plan = assign_job_to_machine(processing_time, windows_of_machine, split_min)
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
@@ -218,7 +221,7 @@ def _neighbor_swap(order: List[int]) -> List[int]:
 
 def schedule_sa_config(
     cfg: SchedulingModel,
-    mode: str = "timespan",
+    mode: str = "assign",
     Tmax: float = 500.0,
     Tthreshold: float = 1.0,
     alpha: float = 0.99,

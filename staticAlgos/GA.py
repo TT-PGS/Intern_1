@@ -15,7 +15,8 @@ from base.io_handler import ReadJsonIOHandler
 
 from split_job.dp_single_job import (
     solve_min_timespan_cfg,
-    solve_feasible_leftover_rule_cfg
+    solve_feasible_leftover_rule_cfg,
+    assign_job_to_machine
 )
 
 # =============================================
@@ -154,8 +155,12 @@ def _evaluate_chromosome(
                 return penalty, {}, {}
             # If feasible, also get the finish time via min_timespan solver (for comparison)
             finish, _ = solve_min_timespan_cfg(total_process_time, windows_of_machine_id, split_min)
-        else:
+        elif mode == "timespan":
             finish, _ = solve_min_timespan_cfg(total_process_time, windows_of_machine_id, split_min)
+        elif mode == "assign":
+            finish, _ = assign_job_to_machine(total_process_time, windows_of_machine_id, split_min)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
 
         if finish is None:
             return penalty, {}, {}
@@ -211,7 +216,7 @@ def _pack_jobs_into_windows(
 # GA main loop
 # =============================================
 
-def run_ga(config: SchedulingModel, params: GAParams, mode: str = "timespan") -> Dict[str, Any]:
+def run_ga(config: SchedulingModel, params: GAParams, mode: str = "assign") -> Dict[str, Any]:
     if params.seed is not None:
         random.seed(params.seed)
 

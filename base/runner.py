@@ -1,11 +1,10 @@
-# base/runner.py
 from typing import Any, Dict
 import numpy as np
 import torch
 from base.agent_base import AgentBase
 from envs.simple_split_env import SimpleSplitSchedulingEnv
 
-def _to_tensor(x, dtype=torch.float32):
+def to_tensor(x, dtype=torch.float32):
     return torch.as_tensor(x, dtype=dtype)
 
 def run_episode(env: SimpleSplitSchedulingEnv, agent: AgentBase, train: bool = True) -> Dict[str, Any]:
@@ -34,10 +33,10 @@ def run_episode(env: SimpleSplitSchedulingEnv, agent: AgentBase, train: bool = T
 
         if train and hasattr(agent, "add_transition"):
             agent.add_transition(
-                _to_tensor(state, torch.float32),
+                to_tensor(state, torch.float32),
                 torch.as_tensor(action, dtype=torch.long),
                 float(reward),
-                _to_tensor(next_state, torch.float32),
+                to_tensor(next_state, torch.float32),
                 bool(done),
             )
         if train and hasattr(agent, "update"):
