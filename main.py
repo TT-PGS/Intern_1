@@ -3,6 +3,8 @@ import json
 import argparse
 import torch
 
+from logs.log import log_info
+
 # ==== Input - Output management ====
 from base.io_handler import ReadJsonIOHandler
 
@@ -54,17 +56,6 @@ def maybe_write_out(out_path: str, payload: dict):
         json.dump(payload, f, indent=2)
     print(f"\nSaved result to: {out_path}")
 
-def log_info(func):
-    import time
-    """Decorator để log thông tin hàm gọi."""
-    def wrapper(*args, **kwargs):
-        print(f"Calling function: {func.__name__}")
-        timestart = time.time()
-        result = func(*args, **kwargs)
-        print(f"Function {func.__name__} completed. Elapsed time: {time.time() - timestart:.2f} seconds")
-        return result
-    return wrapper
-
 # ---------------------------
 # Main
 # ---------------------------
@@ -75,7 +66,7 @@ def main():
     # Common
     parser.add_argument("--mode", type=str, default=None,
                         help="one of: dqn, fcfs, sa, ga. If omitted, use env SCHEDULER_MODE or default 'dqn'.")
-    parser.add_argument("--config", type=str, default="./configs/splittable_jobs.json",
+    parser.add_argument("--config", type=str, default="./datasets/splittable_jobs.json",
                         help="Path to JSON config containing 'model'")
     parser.add_argument("--out", type=str, default="",
                         help="Optional path to write JSON result (assignments, makespan, etc.)")
@@ -131,7 +122,10 @@ def main():
 
         print("\nLoading trained model and running final evaluation...")
         agent = create_agent(agent_name, env.state_dim(), env.action_dim())
-        agent.q_net.load_state_dict(torch.load(model_file_path))
+        ckpt = torch.load(model_file_path, map_location="cpu")
+        assert ckpt["state_dim"] == env.state_dim(), f"state_dim mismatch: {ckpt['state_dim']} vs {env.state_dim()}"
+        assert ckpt["action_dim"] == env.action_dim(), f"action_dim mismatch: {ckpt['action_dim']} vs {env.action_dim()}"
+        agent.q_net.load_state_dict(ckpt["model_state_dict"])
         agent.q_net.eval()
         if hasattr(agent, "epsilon"):
             agent.epsilon = 0.0  # disable exploration for eval

@@ -3,8 +3,8 @@ FCFS scheduler: schedule các job theo thứ tự đến; nếu cùng arrival, j
 Việc gán job vào machine được thực hiện bởi dp_single_job.py (Dynamic Programming).
 
 Chạy:
-    python3 -m staticAlgos.FCFS --mode timespan --config ./configs/splittable_jobs.json
-    python3 -m staticAlgos.FCFS --mode leftover --config ./configs/splittable_jobs.json
+    python3 -m staticAlgos.FCFS --mode timespan --config ./datasets/splittable_jobs.json
+    python3 -m staticAlgos.FCFS --mode leftover --config ./datasets/splittable_jobs.json
 """
 
 import os, sys, argparse
@@ -204,7 +204,7 @@ def _print_result(res: Dict[str, Any]):
 
 def main():
     parser = argparse.ArgumentParser(description="FCFS with best-fit across machines (DP per job).")
-    parser.add_argument("--config", type=str, default="./configs/splittable_jobs.json")
+    parser.add_argument("--config", type=str, default="./datasets/splittable_jobs.json")
     parser.add_argument("--mode", type=str, default="timespan", choices=["timespan", "leftover"])
     args = parser.parse_args()
 

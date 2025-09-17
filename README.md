@@ -27,7 +27,7 @@ Intern_1/
 ├── envs/                           # 🌍 Môi trường RL cụ thể (theo chuẩn gym)
 │   └── simple_split_env.py         # SimpleSplitSchedulingEnv
 │
-├── configs/                        # ⚙️ Các file config YAML/JSON để cấu hình model
+├── datasets/                        # ⚙️ Các file config YAML/JSON để cấu hình model
 │   ├── splittable_jobs.json        # Config cho số job, máy, size theo định dạng json
 │   └── input_10_2_4_1.json         # 1 testcase chạy thử, lấy từ code MinSplit (thoả các điều kiện của testcase trong bài báo)
 │
@@ -60,16 +60,16 @@ source /home/a/PGS/Intern_1/MinSplit/bin/activate
 
 #### 1. For running DQN (not success yet)
 
-python -m main --mode dqn --config ./configs/input_10_2_4_1.json --dqn-episodes 10 --dqn-model qnet.pt
+python -m main --mode dqn --config ./datasets/input_10_2_4_1.json --dqn-episodes 10 --dqn-model qnet.pt
 
 #### 2. For running GA
 
-python -m main --mode ga --config ./configs/input_10_2_4_1.json --split-mode timespan --ga-pop 40 --ga-gen 200 --ga-cx 0.9 --ga-mut 0.2 --ga-tk 5 --ga-seed 42 --ga-verbose --out ./results_ga.json
+python -m main --mode ga --config ./datasets/input_10_2_4_1.json --split-mode timespan --ga-pop 40 --ga-gen 200 --ga-cx 0.9 --ga-mut 0.2 --ga-tk 5 --ga-seed 42 --ga-verbose --out ./results_ga.json
 
 #### 3. For running SA
 
-python -m main --mode sa --config ./configs/input_10_2_4_1.json --split-mode timespan --sa-Tmax 500 --sa-Tthreshold 1 --sa-alpha 0.99 --sa-moves-per-T 50 --sa-seed 42 --out ./results_sa.json
+python -m main --mode sa --config ./datasets/input_10_2_4_1.json --split-mode timespan --sa-Tmax 500 --sa-Tthreshold 1 --sa-alpha 0.99 --sa-moves-per-T 50 --sa-seed 42 --out ./results_sa.json
 
 #### 4. For running FCFS
 
-python -m main --mode fcfs --config ./configs/input_10_2_4_1.json --split-mode timespan --out ./results_fcfs.json
+python -m main --mode fcfs --config ./datasets/input_10_2_4_1.json --split-mode timespan --out ./results_fcfs.json

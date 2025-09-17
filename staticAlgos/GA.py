@@ -394,7 +394,7 @@ def print_summary(result: Dict[str, Any], model: SchedulingModel) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Genetic Algorithm for Splittable Job Scheduling (uses DP per machine).")
-    parser.add_argument("--config", type=str, default="./configs/splittable_jobs.json", help="Path to JSON config.")
+    parser.add_argument("--config", type=str, default="./datasets/splittable_jobs.json", help="Path to JSON config.")
     parser.add_argument("--mode", type=str, default="timespan", choices=["timespan", "leftover"], help="Objective: minimize timespan or just check feasibility then rank by timespan")
     parser.add_argument("--pop_size", type=int, default=40)
     parser.add_argument("--generations", type=int, default=150)

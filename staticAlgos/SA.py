@@ -8,7 +8,7 @@ Simulated Annealing for Splittable Job Scheduling (DP per job).
 - In kết quả: finish đúng (= max end của job), horizon = makespan thực, Gantt theo máy.
 
 Chạy:
-    python3 -m staticAlgos.SA --config ./configs/splittable_jobs.json --mode timespan
+    python3 -m staticAlgos.SA --config ./datasets/splittable_jobs.json --mode timespan
     # Tuỳ chọn:
     --Tmax 500 --Tthreshold 1 --alpha 0.99 --moves_per_T 50 --seed 42 --verbose --out path.json
 """
@@ -290,7 +290,7 @@ def schedule_sa_config(
 
 def main():
     parser = argparse.ArgumentParser(description="Simulated Annealing for Splittable Job Scheduling (DP per job).")
-    parser.add_argument("--config", type=str, default="./configs/splittable_jobs.json", help="Path to JSON config.")
+    parser.add_argument("--config", type=str, default="./datasets/splittable_jobs.json", help="Path to JSON config.")
     parser.add_argument("--mode", type=str, default="timespan", choices=["timespan", "leftover"], help="DP mode.")
     parser.add_argument("--Tmax", type=float, default=500.0)
     parser.add_argument("--Tthreshold", type=float, default=1.0)

@@ -6,17 +6,17 @@
 
 **✔ Files cần hoàn thiện:**
 
-* `base/model.py`: class `SchedulingModel`
-* `envs/simple_split_env.py`: môi trường `SimpleSplitSchedulingEnv`
+- `base/model.py`: class `SchedulingModel`
+- `envs/simple_split_env.py`: môi trường `SimpleSplitSchedulingEnv`
 
 **🎯 Yêu cầu:**
 
-* Mô hình có thể config dễ dàng (`num_jobs`, `num_machines`, `max_job_size`)
-* Môi trường trả state, nhận action, tính reward
+- Mô hình có thể config dễ dàng (`num_jobs`, `num_machines`, `max_job_size`)
+- Môi trường trả state, nhận action, tính reward
 
 **🧪 Cách test:**
 
-* Tạo `test_env.py`: reset + step + in ra reward/makespan
+- Tạo `test_env.py`: reset + step + in ra reward/makespan
 
 ---
 
@@ -24,17 +24,17 @@
 
 **✔ Files cần hoàn thiện:**
 
-* `base/agent_base.py`
-* `agents/random_agent.py`
+- `base/agent_base.py`
+- `agents/random_agent.py`
 
 **🎯 Yêu cầu:**
 
-* Agent tuân theo `AgentBase`
-* Agent random dùng `action_dim` để chọn action
+- Agent tuân theo `AgentBase`
+- Agent random dùng `action_dim` để chọn action
 
 **🧪 Cách test:**
 
-* Dùng `main.py` chạy env + random agent → thấy reward in ra là đủ
+- Dùng `main.py` chạy env + random agent → thấy reward in ra là đủ
 
 ---
 
@@ -42,17 +42,17 @@
 
 **✔ Files cần hoàn thiện:**
 
-* `base/io_handler.py`
-* `base/runner.py`
+- `base/io_handler.py`
+- `base/runner.py`
 
 **🎯 Yêu cầu:**
 
-* `get_input()` và `show_output()` dễ override
-* `run_episode()` thực hiện RL loop: reset, step, agent.select/update, return total reward
+- `get_input()` và `show_output()` dễ override
+- `run_episode()` thực hiện RL loop: reset, step, agent.select/update, return total reward
 
 **🧪 Cách test:**
 
-* Gọi `run_episode(env, agent, io)` từ `main.py`, in ra tổng reward
+- Gọi `run_episode(env, agent, io)` từ `main.py`, in ra tổng reward
 
 ---
 
@@ -60,17 +60,17 @@
 
 **✔ Files cần hoàn thiện:**
 
-* `agents/agent_factory.py`
-* `configs/default_model.yaml`
+- `agents/agent_factory.py`
+- `datasets/default_model.yaml`
 
 **🎯 Yêu cầu:**
 
-* Agent được load từ config (ví dụ `agent: random`)
-* Config dễ chỉnh số job, số máy
+- Agent được load từ config (ví dụ `agent: random`)
+- Config dễ chỉnh số job, số máy
 
 **🧪 Cách test:**
 
-* Sửa `main.py` gọi qua config, đổi agent dễ dàng
+- Sửa `main.py` gọi qua config, đổi agent dễ dàng
 
 ---
 
@@ -78,19 +78,19 @@
 
 **✔ Files cần viết:**
 
-* `logger/structured_logger.py` (chưa cần exporters)
-* Ghi JSON/line mỗi episode
+- `logger/structured_logger.py` (chưa cần exporters)
+- Ghi JSON/line mỗi episode
 
 **🧪 Cách test:**
 
-* Sau mỗi `run_episode()`, log ra `logs/YYYYMMDD-HHMM/train.jsonl`
+- Sau mỗi `run_episode()`, log ra `logs/YYYYMMDD-HHMM/train.jsonl`
 
 ---
 
 ## ✅ Kết quả Mục tiêu 1
 
-* Chạy `main.py` → gọi được đúng env, agent, log reward theo tập
-* Output rõ ràng, agent có thể dễ dàng thay
+- Chạy `main.py` → gọi được đúng env, agent, log reward theo tập
+- Output rõ ràng, agent có thể dễ dàng thay
 
 ---
 
@@ -100,27 +100,27 @@
 
 **✔ Files:**
 
-* `agents/dqn_agent.py` (mới)
-* Dùng `torch`, `replay buffer`, `target network`
+- `agents/dqn_agent.py` (mới)
+- Dùng `torch`, `replay buffer`, `target network`
 
 **🎯 Yêu cầu:**
 
-* Network chọn action theo Q-value
-* Update Q theo Bellman (target Q)
-* Có epsilon-greedy
+- Network chọn action theo Q-value
+- Update Q theo Bellman (target Q)
+- Có epsilon-greedy
 
 ---
 
 ### 🔹 Giai đoạn B.2 – Tích hợp agent vào factory
 
-* Sửa `agent_factory.py` để thêm `"dqn": DQNAgent(...)`
+- Sửa `agent_factory.py` để thêm `"dqn": DQNAgent(...)`
 
 ---
 
 ### 🔹 Giai đoạn B.3 – Tuning & log
 
-* Ghi log reward qua nhiều episode
-* Có thể lưu mô hình (checkpoint)
+- Ghi log reward qua nhiều episode
+- Có thể lưu mô hình (checkpoint)
 
 ---
 
@@ -128,19 +128,19 @@
 
 ### 🔹 Giai đoạn C.1 – Dùng `stable-baselines3` (hoặc viết PPO riêng)
 
-* Viết `agents/ppo_agent.py`: wrapper của SB3 PPO agent
+- Viết `agents/ppo_agent.py`: wrapper của SB3 PPO agent
 
 **🎯 Yêu cầu:**
 
-* Dùng chuẩn `gym.Env` để tương thích với SB3
-* Huấn luyện qua `model.learn()`, predict action
+- Dùng chuẩn `gym.Env` để tương thích với SB3
+- Huấn luyện qua `model.learn()`, predict action
 
 ---
 
 ### 🔹 Giai đoạn C.2 – So sánh kết quả
 
-* Ghi log reward → Grafana/ClickHouse
-* So sánh reward/makespan giữa DQN vs PPO
+- Ghi log reward → Grafana/ClickHouse
+- So sánh reward/makespan giữa DQN vs PPO
 
 ---
 

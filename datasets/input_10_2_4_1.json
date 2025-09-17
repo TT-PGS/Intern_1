@@ -1,5 +1,5 @@
 {
-  "agent": "q_learning",
+  "agent": "dqn",
   "model": {
     "num_jobs": 10,
     "num_machines": 2,

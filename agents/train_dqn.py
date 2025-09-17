@@ -76,6 +76,11 @@ def train_dqn(
         if er > best_eval_reward:
             best_eval_reward = er
             torch.save(agent.q_net.state_dict(), model_save_path)
+            torch.save({
+                "state_dim": state_dim,
+                "action_dim": action_dim,
+                "model_state_dict": agent.q_net.state_dict(),
+            }, model_save_path)
             print(f"📌 Saved BETTER (eval) model at Ep {ep}: eval={best_eval_reward:.2f} -> {model_save_path}")
 
         # Hard update target (nếu agent có)
@@ -86,5 +91,5 @@ def train_dqn(
     return {"train_rewards": train_rewards, "eval_rewards": eval_rewards}
 
 if __name__ == "__main__":
-    cfg_path = os.path.join("configs", "splittable_jobs.json")
+    cfg_path = os.path.join("datasets", "splittable_jobs.json")
     stats = train_dqn(cfg_path, model_save_path="qnet.pt", episodes=500, seed=42)

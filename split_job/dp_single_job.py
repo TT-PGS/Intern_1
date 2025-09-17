@@ -266,8 +266,8 @@ def print_list(prefix: str, lst: list) -> None:
         print(f"{item}\n")
 
 if __name__ == "__main__":
-    # config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "splittable_jobs.json")
-    config_path = os.path.join(os.path.dirname(__file__), "..", "configs", "input_10_2_4_1.json")
+    # config_path = os.path.join(os.path.dirname(__file__), "..", "datasets", "splittable_jobs.json")
+    config_path = os.path.join(os.path.dirname(__file__), "..", "datasets", "input_10_2_4_1.json")
     config = ReadJsonIOHandler(config_path).get_input()
 
     total_processing_time_job_0 = config.get_job_size(0)
