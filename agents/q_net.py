@@ -9,7 +9,6 @@ class QNet(nn.Module):
     """
     def __init__(self, state_dim: int, action_dim: int, h1: int = 128, h2: int = 64):
         super().__init__()
-        self.action_dim = action_dim
         self.net = nn.Sequential(
             nn.Linear(state_dim, h1),
             nn.ReLU(),

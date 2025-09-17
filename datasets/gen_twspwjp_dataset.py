@@ -11,7 +11,7 @@ The specs of the dataset are following:
     - Each window length is discrete uniform in [spm, 12].
     - Gaps between windows are discrete uniform in [0, 3].
     - Ensure total capacity across all machines >= total processing time of all jobs (with 5-15% slack).
-- Random seed: 2025 (for reproducibility)
+- Random seed: start on 20250609 (for reproducibility)
 
 The dataset is saved as JSON files in the specified output directory. Each instance file is named as:
     twspwjp_n{n}_k{k}_spm{spm}_i{index}.json
@@ -165,9 +165,9 @@ def main():
                     help="Comma-separated split_min values.")
     p.add_argument("--instances-per-combo", type=int, default=10,
                     help="Instances per (n,k,spm) combination.")
-    p.add_argument("--seed", type=int, default=2025,
+    p.add_argument("--seed", type=int, default=20250609,
                     help="Base seed for reproducibility.")
-    p.add_argument("--outdir", type=str, default="./datasets/twspwjp_v1",
+    p.add_argument("--outdir", type=str, default="./",
                     help="Output directory.")
     args = p.parse_args()
 
@@ -176,7 +176,7 @@ def main():
     spms = [int(x) for x in args.spms.split(",") if x.strip()]
     per = args.instances_per_combo
 
-    outdir = Path(args.outdir)
+    outdir = Path(args.outdir).joinpath(str(args.seed))
     outdir.mkdir(parents=True, exist_ok=True)
 
     total = 0
@@ -185,8 +185,8 @@ def main():
             for spm in spms:
                 for i in range(per):
                     inst = gen_instance(args.seed, n, k, spm, i)
-                    fname = f"twspwjp_n{n}_k{k}_spm{spm}_i{i}.json"
-                    fpath = outdir / fname
+                    fname = f"twspwjp_Jobs_{n}_Machines_{k}_Splitmin_{spm}_Index_{i}.json"
+                    fpath = outdir.joinpath(fname)
                     with open(fpath, "w") as f:
                         json.dump(inst, f, indent=2)
                     total += 1
