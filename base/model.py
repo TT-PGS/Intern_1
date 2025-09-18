@@ -7,13 +7,33 @@ class SchedulingModel:
         num_machines: int,
         processing_times: List[int],
         split_min: int,
-        time_windows: Dict[int, List[List[int]]]
+        time_windows: Dict[int, List[List[int]]],
+        total_capacity_all_windows: int,
+        lower_bound: int,
+        total_processing_time: int,
+        feasible: bool,
     ):
         self.num_jobs = num_jobs
         self.num_machines = num_machines
         self.processing_times = processing_times
         self.split_min = split_min
         self.time_windows = time_windows
+        self.total_capacity_all_windows = total_capacity_all_windows
+        self.lower_bound = lower_bound
+        self.total_processing_time = total_processing_time
+        self.feasible = feasible
+
+    def get_total_capacity_all_windows(self) -> int:
+        return self.total_capacity_all_windows
+
+    def get_lower_bound(self) -> int:
+        return self.lower_bound
+
+    def get_total_processing_time(self) -> int:
+        return self.total_processing_time
+
+    def is_feasible(self) -> bool:
+        return self.feasible
 
     def get_num_jobs(self) -> int:
         return self.num_jobs
@@ -42,5 +62,9 @@ class SchedulingModel:
             "num_machines": self.num_machines,
             "processing_times": self.processing_times,
             "split_min": self.split_min,
-            "time_windows": self.time_windows
+            "time_windows": self.time_windows,
+            "total_capacity_all_windows": self.total_capacity_all_windows,
+            "lower_bound": self.lower_bound,
+            "total_processing_time": self.total_processing_time,
+            "feasible": self.feasible
         }

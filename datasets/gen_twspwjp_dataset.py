@@ -53,8 +53,8 @@ def gen_machine_windows(
     rng: random.Random,
     capacity_needed: int,
     spm: int,
-    min_wins: int = 3,
-    max_wins: int = 6,
+    min_wins: int = 20,
+    max_wins: int = 24,
     gap_lo: int = 0,
     gap_hi: int = 3
 ) -> List[List[int]]:
@@ -86,7 +86,7 @@ def gen_machine_windows(
         windows.append([start, end])
         total_cap += (end - start)
 
-    return windows
+    return total_cap, windows
 
 def ensure_capacity_all_machines(
     rng: random.Random,
@@ -110,6 +110,7 @@ def ensure_capacity_all_machines(
 
     time_windows: Dict[str, List[List[int]]] = {}
     allocated = 0
+    total_cap = 0
     for m in range(k):
         # Máy cuối nhận phần còn lại để đảm bảo tổng
         if m == k - 1:
@@ -118,10 +119,11 @@ def ensure_capacity_all_machines(
             cap_m = max(spm, int(round(total_target * weights[m])))
             allocated += cap_m
 
-        wins = gen_machine_windows(rng, cap_m, spm)
+        cap, wins = gen_machine_windows(rng, cap_m, spm)
         time_windows[str(m)] = wins
+        total_cap += cap
 
-    return time_windows
+    return total_cap, time_windows
 
 def gen_instance(
     base_seed: int,
@@ -139,14 +141,20 @@ def gen_instance(
 
     processing_times = gen_processing_times(rng, n, spm)
     total_work = sum(processing_times)
+    lower_bound = total_work / k
 
-    time_windows = ensure_capacity_all_machines(rng, k, total_work, spm)
+    total_cap, time_windows = ensure_capacity_all_machines(rng, k, total_work, spm)
 
+    feasible = total_cap >= total_work
     return {
         "agent": "dqn",
         "model": {
             "num_jobs": n,
             "num_machines": k,
+            "total_capacity_all_windows": total_cap,
+            "total_processing_time": total_work,
+            "feasible": feasible,
+            "lower_bound": lower_bound,
             "processing_times": processing_times,
             "split_min": spm,
             "time_windows": time_windows

@@ -41,7 +41,11 @@ class ReadJsonIOHandler(IOHandler):
             num_machines=model_data["num_machines"],
             processing_times=model_data["processing_times"],
             split_min=model_data["split_min"],
-            time_windows=time_windows
+            time_windows=time_windows,
+            total_capacity_all_windows=model_data["total_capacity_all_windows"],
+            lower_bound=model_data["lower_bound"],
+            total_processing_time=model_data["total_processing_time"],
+            feasible=model_data["feasible"]
         )
     
     def analyze_schedule(self, job_assignments: dict) -> dict:

@@ -1,0 +1,9 @@
+{
+  "sa": {
+    "Tmax": 500,
+    "Tthreshold": 1,
+    "alpha": 0.99,
+    "moves_per_T": 100,
+    "verbose": false
+  }
+}

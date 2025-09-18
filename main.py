@@ -1,7 +1,9 @@
-import os
+import os, glob
 import json
 import argparse
 import torch
+import time
+from copy import deepcopy
 
 from logs.log import log_info
 
@@ -48,7 +50,7 @@ def print_assignments(assignments):
         finish = max((e for (_w, s, e) in segs), default=None)
         print(f"  Job {j}: Machine {m}, finish={finish}, segments={segs}")
 
-def maybe_write_out(out_path: str, payload: dict):
+def write_output_results(out_path: str, payload: dict):
     if not out_path:
         return
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -99,17 +101,19 @@ def main():
 
     args = parser.parse_args()
 
-    # Load config
-    io_json_input_file_path = args.config
-    cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
+    cfg = None
+    # Load config - common for all modes, except all_1/all_2
+    if args.mode not in ["all_1", "all_2"]:
+        io_json_input_file_path = args.config
+        cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
 
     # Mode resolution
-    mode = (args.mode or os.environ.get("SCHEDULER_MODE") or "dqn").lower()
-    if mode not in ["dqn", "fcfs", "sa", "ga"]:
-        raise ValueError(f"Unknown mode: {mode}. Use one of: dqn, fcfs, sa, ga.")
+    mode = (args.mode).lower()
+    if mode not in ["dqn", "fcfs", "sa", "ga", "all_1", "all_2"]:
+        raise ValueError(f"Unknown mode: {mode}. Use one of: dqn, fcfs, sa, ga, all_1, all_2.")
 
     # ---------------- RL branch ----------------
-    if mode == "dqn" or mode == "all":
+    if mode == "dqn":
         env = SimpleSplitSchedulingEnv(cfg)
         agent_name = mode
 
@@ -135,7 +139,7 @@ def main():
         io.show_output(result)
 
     # ---------------- Static algorithms ----------------
-    if mode == "fcfs" or mode == "all":
+    if mode == "fcfs":
         print("\nRunning FCFS (best-fit across machines, DP per job)...")
         res = schedule_fcfs(cfg, mode=args.split_mode)
         print(f"Mode: {args.split_mode}")
@@ -149,9 +153,9 @@ def main():
             "assignments": res["assignments"],
             "final_windows": res["final_windows"],
         }
-        maybe_write_out(args.out, payload)
+        write_output_results(args.out, payload)
 
-    if mode == "sa" or mode == "all":
+    if mode == "sa":
         print("\nRunning SA ...")
         res = schedule_sa_config(
             cfg,
@@ -183,9 +187,9 @@ def main():
             "assignments": assignments,
             "final_windows": res.get("final_windows", []),
         }
-        maybe_write_out(args.out, payload)
+        write_output_results(args.out, payload)
 
-    if mode == "ga" or mode == "all":
+    if mode == "ga":
         print("\nRunning GA ...")
         params = GAParams(
             pop_size=args.ga_pop,
@@ -249,7 +253,136 @@ def main():
             "per_machine_jobs": ga_res["per_machine_jobs"],
             "per_machine_segments": ga_res["per_machine_segments"],
         }
-        maybe_write_out(args.out, payload)
+        write_output_results(args.out, payload)
+    
+    if mode == "all_1":
+        """
+            Run all algorithms in sequence: FCFS, SA, GA with all datasets.
+            Note: DQN is excluded due to its training time and variability.
+            This mode is useful for benchmarking and comparing static algorithms.
+            And getting a comprehensive overview of performance across different methods
+            As well as generating results for reports or analysis.
+            Then those results can be used as best-known solutions for DQN and any RDL methods.
+        """
+        split_mode = "assign"
+        datasets_folder = "datasets/"
+        output_folder = "metrics/"
+        sa_config = "configs/SA_configs.json"
+        ga_config = "configs/GA_configs.json"
+
+        with open(sa_config) as f:
+            sa_params = json.load(f)
+
+        with open(ga_config) as f:
+            ga_params = json.load(f)
+
+        for file_name in glob.glob(os.path.join(datasets_folder, "**", "*.json"), recursive=True):
+            '''
+            Create subfolder in output_folder based on the dataset's seed (parent folder name).
+            This organizes results by dataset for easier analysis.
+            E.g., datasets/20250616/42.json -> metrics/20250616/42.json
+            '''
+            seed_of_input = file_name.split("/")[-2]
+            output_subfolder = os.path.join(output_folder, seed_of_input)
+            os.makedirs(output_subfolder, exist_ok=True)
+            output_file_path = os.path.join(output_subfolder, os.path.basename(file_name))
+
+            '''
+                Run FCFS, SA, GA in sequence for the current dataset.
+                Collect results and write to a single JSON file in output_subfolder.
+            '''
+            print(f"\n\n=== Processing dataset: {file_name} ===")
+            io_json_input_file_path = file_name
+            cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
+            cfg_fcfs = deepcopy(cfg)
+            cfg_sa = deepcopy(cfg)
+            cfg_ga = deepcopy(cfg)
+            lower_bound = cfg.get_lower_bound()
+
+            '''================ FCFS ================'''
+            start_fcfs = time.time()
+            res_fcfs = schedule_fcfs(cfg_fcfs, mode=split_mode)
+            end_fcfs = time.time()
+            processing_time_fcfs = end_fcfs - start_fcfs
+            percentage_gap_fcfs = (res_fcfs["makespan"] - lower_bound) * 100 / lower_bound
+
+            '''================ SA ================'''
+            start_sa = time.time()
+            res_sa = schedule_sa_config(
+                cfg_sa,
+                mode=split_mode,
+                Tmax=sa_params["sa"].get("Tmax"),
+                Tthreshold=sa_params["sa"].get("Tthreshold"),
+                alpha=sa_params["sa"].get("alpha"),
+                moves_per_T=sa_params["sa"].get("moves_per_T"),
+                seed=seed_of_input,
+                verbose=sa_params["sa"].get("verbose"),
+            )
+            end_sa = time.time()
+            processing_time_sa = end_sa - start_sa
+            percentage_gap_sa = (res_sa["best_makespan"] - lower_bound) * 100 / lower_bound
+
+            '''================ GA ================'''
+            params = GAParams(
+                pop_size=ga_params["ga"].get("pop_size"),
+                generations=ga_params["ga"].get("generations"),
+                tournament_k=ga_params["ga"].get("tournament_k"),
+                crossover_rate=ga_params["ga"].get("crossover_rate"),
+                mutation_rate_perm=ga_params["ga"].get("mutation_rate_perm"),
+                seed=seed_of_input,
+            )
+            start_ga = time.time()
+            res_ga = run_ga(cfg_ga, params, mode=split_mode)
+            end_ga = time.time()
+            processing_time_ga = end_ga - start_ga
+            percentage_gap_ga = (res_ga["makespan"] - lower_bound) * 100 / lower_bound
+
+            payload = {
+                "dataset": os.path.basename(file_name),
+                "lower_bound": lower_bound,
+                "split_mode": split_mode,
+                "fcfs_results": {
+                    "makespan": res_fcfs["makespan"],
+                    "assignments": res_fcfs["assignments"],
+                    "final_windows": res_fcfs["final_windows"],
+                    "processing_time_milliseconds": processing_time_fcfs * 1000,
+                    "percentage_gap": percentage_gap_fcfs,
+                },
+                "sa_results": {
+                    "best_order": res_sa.get("best_order"),
+                    "makespan": res_sa.get("best_makespan"),
+                    "assignments": res_sa.get("assignments"),
+                    "final_windows": res_sa.get("final_windows"),
+                    "processing_time_milliseconds": processing_time_sa * 1000,
+                    "percentage_gap": percentage_gap_sa,
+                },
+                "ga_results": {
+                    "best_genome": {
+                        "order": res_ga.get("order"),
+                        "machine_genes": res_ga.get("machines"),
+                    },
+                    "makespan": res_ga.get("makespan"),
+                    "assignments": res_ga.get("assignments"),
+                    "machine_finish_times": res_ga.get("machine_finish_times"),
+                    "per_machine_jobs": res_ga.get("per_machine_jobs"),
+                    "per_machine_segments": res_ga.get("per_machine_segments"),
+                    "processing_time_milliseconds": processing_time_ga * 1000,
+                    "percentage_gap": percentage_gap_ga,
+                },
+            }
+
+            write_output_results(output_file_path, payload)
+
+    if mode == "all_2":
+        """
+            Run all RDL algorithms in sequence: DQN (for now) with all datasets.
+            Note: DQN training time may be significant, so consider this when using this mode.
+            Ensure that DQN training parameters are set appropriately for each dataset.
+            And the trained models are saved with distinct names to avoid overwriting.
+            This mode is useful for evaluating DQN performance across different datasets.
+            As well as generating results for reports or analysis.
+        """
+        pass
 
 
 if __name__ == "__main__":

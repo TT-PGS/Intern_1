@@ -66,7 +66,7 @@ def assign_job_to_machine(
                         continue
     
     if job_remaing > 0:
-        print("ERROR: Not feasible to assign job to machine")
+        #TODO: should get log here
         return None, None
     else:
         timespan = max(end for (_, _, end) in plan) - min(start for (_, start, _) in plan)

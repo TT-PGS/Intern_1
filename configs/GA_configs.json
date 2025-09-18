@@ -1,0 +1,11 @@
+{
+  "ga": {
+    "pop_size": 100,
+    "generations": 500,
+    "tournament_k": 5,
+    "crossover_rate": 0.8,
+    "mutation_rate_perm": 0.1,
+    "mutation_rate_mach": 0,
+    "verbose": false
+  }
+}
