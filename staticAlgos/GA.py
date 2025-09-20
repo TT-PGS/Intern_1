@@ -33,14 +33,86 @@ class Chromosome:
 
 @dataclass
 class GAParams:
-    pop_size: int = 40
-    generations: int = 150
+    pop_size: int = 100
+    generations: int = 500
     tournament_k: int = 5
-    crossover_rate: float = 0.9
-    mutation_rate_perm: float = 0.2   # probability to mutate permutation (swap)
-    mutation_rate_mach: float = 0.05  # probability per gene to mutate machine id
+    crossover_rate: float = 0.8
+    mutation_rate_perm: float = 0.1   # probability to mutate permutation (swap)
+    mutation_rate_mach: float = 0   # probability per gene to mutate machine id
     elite: int = 2
     seed: Optional[int] = None
+
+# =============================================
+# Helpers for capacity & segment normalization
+# =============================================
+
+def _subtract_segments_from_windows(windows: List[List[int]],
+                                    segs: List[Tuple[int, int]]) -> List[List[int]]:
+    """
+    Trừ các đoạn [s,e) trong segs khỏi danh sách windows [[ws,we),...].
+    Trả về windows còn lại (không chồng lấn, đã sắp xếp).
+    """
+    if not segs:
+        return windows[:]
+    segs_sorted = sorted(segs, key=lambda x: (x[0], x[1]))
+    cur_windows = sorted(windows, key=lambda w: (w[0], w[1]))
+    out: List[List[int]] = []
+    i = j = 0
+    while i < len(cur_windows):
+        ws, we = cur_windows[i]
+        wstart = ws
+        wend = we
+        while j < len(segs_sorted) and segs_sorted[j][1] <= wstart:
+            j += 1
+        k = j
+        consumed = False
+        while k < len(segs_sorted) and segs_sorted[k][0] < wend:
+            cs, ce = max(wstart, segs_sorted[k][0]), min(wend, segs_sorted[k][1])
+            if cs < ce:
+                consumed = True
+                if wstart < cs:
+                    out.append([wstart, cs])
+                wstart = ce
+                if wstart >= wend:
+                    break
+            k += 1
+        if not consumed:
+            out.append([wstart, wend])
+        elif wstart < wend:
+            out.append([wstart, wend])
+        i += 1
+    # gộp nếu dính nhau
+    out.sort(key=lambda w: (w[0], w[1]))
+    merged: List[List[int]] = []
+    for s, e in out:
+        if not merged or s > merged[-1][1]:
+            merged.append([s, e])
+        else:
+            merged[-1][1] = max(merged[-1][1], e)
+    # Loại các cửa sổ rỗng
+    return [[s, e] for s, e in merged if e > s]
+
+
+def _normalize_segs(segs_raw: List[Tuple[int, ...]]) -> List[Tuple[int, int]]:
+    """
+    Chuẩn hoá segs từ solver về list[(start, end)].
+    Chấp nhận mỗi phần tử có dạng (s, e) hoặc (x, s, e).
+    """
+    norm: List[Tuple[int, int]] = []
+    for t in segs_raw:
+        if len(t) == 2:
+            s, e = t
+        elif len(t) == 3:
+            _, s, e = t
+        else:
+            raise ValueError(f"Unexpected segment tuple shape: {t}")
+        norm.append((s, e))
+    return norm
+
+
+def _total_capacity_windows(wins: List[List[int]]) -> int:
+    return sum(max(0, we - ws) for (ws, we) in wins)
+
 
 # =============================================
 # GA operators
@@ -65,8 +137,8 @@ def pmx_crossover(p1: List[int], p2: List[int]) -> Tuple[List[int], List[int]]:
     mapping2 = {p1[i]: p2[i] for i in range(a, b + 1)}
 
     # Copy segment
-    c1[a:b+1] = p2[a:b+1]
-    c2[a:b+1] = p1[a:b+1]
+    c1[a:b + 1] = p2[a:b + 1]
+    c2[a:b + 1] = p1[a:b + 1]
 
     # Resolve outside segment via mapping (PMX)
     def resolve(child: List[int], mapping: Dict[int, int], a: int, b: int):
@@ -103,114 +175,271 @@ def mutate_machines(machs: List[int], num_machines: int, rate: float) -> None:
             machs[i] = random.randint(0, num_machines - 1)
 
 # =============================================
-# Scheduling evaluation using DP per MACHINE (aggregate, then split to jobs)
+# Single-job assignment (forward/backward) + Job-wise packing per machine
 # =============================================
 
-def _sum_proc_time_for_machine(order: List[int], machines: List[int], processing_times: List[int], machine_id: int) -> Tuple[int, List[int]]:
-    """Return (total_process_time, jobs_on_m_in_order). The order among jobs is induced by global 'order'."""
-    jobs_on_machine_id_in_order: List[int] = [j for j in order if machines[j] == machine_id]
-    total_process_time = sum(processing_times[j] for j in jobs_on_machine_id_in_order)
-    return total_process_time, jobs_on_machine_id_in_order
+def _assign_single_job(need: int,
+                        windows: List[List[int]],
+                        split_min: int,
+                        mode: str,
+                        direction: str = "forward") -> Tuple[Optional[int], List[Tuple[int, int]], bool]:
+    """
+    Gán một job vào windows theo 1 trong 2 chiến lược:
+        - forward (earliest-fit): dùng solver trực tiếp
+        - backward (latest-fit): ánh xạ thời gian t -> -t để tái sử dụng solver
+    Trả (finish_time, segs[(s,e)], ok)
+    """
+    wins_sorted = [w[:] for w in sorted(windows, key=lambda w: (w[0], w[1]))]
 
+    if direction == "backward":
+        # ánh xạ t -> -t và đảo thứ tự để pack từ cuối
+        wins_rev = [[-w[1], -w[0]] for w in wins_sorted][::-1]
+        if mode == "leftover":
+            ok, _ = solve_feasible_leftover_rule_cfg(need, wins_rev, split_min)
+            if not ok:
+                return None, [], False
+            fin_r, segs_r = solve_min_timespan_cfg(need, wins_rev, split_min)
+        elif mode == "timespan":
+            fin_r, segs_r = solve_min_timespan_cfg(need, wins_rev, split_min)
+        elif mode == "assign":
+            fin_r, segs_r = assign_job_to_machine(need, wins_rev, split_min)
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+        if fin_r is None or not segs_r:
+            return None, [], False
+        segs_fwd: List[Tuple[int, int]] = []
+        for t in segs_r:
+            if len(t) == 2:
+                s_r, e_r = t
+            else:
+                _, s_r, e_r = t
+            s, e = -e_r, -s_r
+            segs_fwd.append((s, e))
+        segs_fwd.sort()
+        fin = max(e for (_, e) in segs_fwd)
+        return fin, segs_fwd, True
+
+    # direction == "forward"
+    if mode == "leftover":
+        ok, _ = solve_feasible_leftover_rule_cfg(need, wins_sorted, split_min)
+        if not ok:
+            return None, [], False
+        fin, segs_raw = solve_min_timespan_cfg(need, wins_sorted, split_min)
+    elif mode == "timespan":
+        fin, segs_raw = solve_min_timespan_cfg(need, wins_sorted, split_min)
+    elif mode == "assign":
+        fin, segs_raw = assign_job_to_machine(need, wins_sorted, split_min)
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
+    if fin is None or not segs_raw:
+        return None, [], False
+
+    segs = _normalize_segs(segs_raw)
+    return fin, segs, True
+
+def _machine_total_capacity(time_windows: Dict[int, List[List[int]]]) -> Dict[int, int]:
+    return {m: sum(max(0, we - ws) for (ws, we) in sorted(wins)) for m, wins in time_windows.items()}
+
+def _repair_machines(order: List[int],
+                        machines: List[int],
+                        processing_times: List[int],
+                        time_windows: Dict[int, List[List[int]]]) -> List[int]:
+    """
+    Sửa vector machines (gán máy) theo hướng capacity-aware:
+        - Tính tổng tải theo máy (sum p_j các job đang gán lên máy)
+        - Nếu máy nào vượt capacity, chuyển bớt job sang máy còn dư nhiều nhất
+        - Chọn job chuyển: job có p_j lớn nhất ở máy đang quá tải, duyệt cho tới khi hết quá tải
+    Trả về bản sao machines đã sửa (không mutate tham số gốc).
+    """
+    num_jobs = len(order)
+    mach_fixed = machines[:]  # copy
+
+    # capacity mỗi máy
+    cap = _machine_total_capacity(time_windows)
+
+    # tổng tải hiện tại theo máy
+    load: Dict[int, int] = {m: 0 for m in cap.keys()}
+    jobs_on_m: Dict[int, List[Tuple[int,int]]] = {m: [] for m in cap.keys()}  # (pos, p_j)
+    for pos, j in enumerate(order):
+        m = mach_fixed[pos]
+        pj = processing_times[j]
+        load[m] += pj
+        jobs_on_m[m].append((pos, pj))
+
+    # máy có thể không có trong dict nếu key windows là list 0..M-1
+    # => đảm bảo đầy đủ key
+    for m in range(max(cap.keys())+1):
+        load.setdefault(m, 0)
+        jobs_on_m.setdefault(m, [])
+
+    # lặp tới khi tất cả máy không quá tải hoặc không chuyển được nữa
+    changed = True
+    while changed:
+        changed = False
+        # tìm máy quá tải nhất
+        over_machines = [(m, load[m] - cap.get(m, 0)) for m in load if load[m] > cap.get(m, 0)]
+        if not over_machines:
+            break
+        # sắp xếp giảm dần theo mức vượt
+        over_machines.sort(key=lambda x: x[1], reverse=True)
+
+        for m_over, excess in over_machines:
+            if excess <= 0:
+                continue
+            # ứng viên nhận: máy còn dư capacity nhiều nhất
+            under = [(m2, cap.get(m2, 0) - load[m2]) for m2 in load if cap.get(m2, 0) - load[m2] > 0 and m2 != m_over]
+            if not under:
+                # không có máy nhận -> hết cách sửa
+                continue
+            under.sort(key=lambda x: x[1], reverse=True)
+            receiver = under[0][0]
+
+            # chọn job lớn nhất trên m_over để giảm nhanh
+            if not jobs_on_m[m_over]:
+                continue
+            jobs_on_m[m_over].sort(key=lambda t: t[1], reverse=True)  # by pj desc
+            pos_move, pj_move = jobs_on_m[m_over][0]
+
+            # chuyển
+            mach_fixed[pos_move] = receiver
+            jobs_on_m[m_over].pop(0)
+            jobs_on_m[receiver].append((pos_move, pj_move))
+            load[m_over] -= pj_move
+            load[receiver] += pj_move
+            changed = True
+
+    return mach_fixed
+
+
+def _assign_jobs_on_machine(jobs_order: List[int],
+                            processing_times: List[int],
+                            windows: List[List[int]],
+                            split_min: int,
+                            mode: str = "assign",
+                            debug: bool = False) -> Tuple[Optional[int], List[Tuple[int, int, int]], bool]:
+    """
+    Gán tuần tự các job theo jobs_order vào 'windows' của 1 máy.
+    Trả:
+        - finish_time (max end) hoặc None nếu infeasible,
+        - segments [(job, start, end), ...] cho đúng job,
+        - feasible (bool)
+    """
+    # Guard: tổng capacity >= tổng nhu cầu
+    total_need = sum(processing_times[j] for j in jobs_order)
+    if _total_capacity_windows(windows) < total_need:
+        # if debug:
+        #     print("[DBG] Machine infeasible: total capacity < total need")
+        return None, [], False
+
+    def try_direction(direction: str) -> Tuple[Optional[int], List[Tuple[int, int, int]], bool]:
+        win_cur = [w[:] for w in sorted(windows, key=lambda w: (w[0], w[1]))]
+        all_segments: List[Tuple[int, int, int]] = []
+        finish_time = 0
+
+        for idx, j in enumerate(jobs_order):
+            need = processing_times[j]
+            if need == 0:
+                continue
+
+            fin, segs, ok = _assign_single_job(need, win_cur, split_min, mode, direction=direction)
+            if not ok or fin is None:
+                if debug:
+                    print(f"[DBG] Fail {direction} at job {j}: solver returned None/empty")
+                return None, [], False
+
+            # ép mỗi mảnh >= split_min
+            for (s, e) in segs:
+                if e - s < split_min:
+                    if debug:
+                        print(f"[DBG] Fail {direction} at job {j}: chunk {e - s} < split_min")
+                    return None, [], False
+
+            # ghi lại và trừ capacity
+            for (s, e) in segs:
+                all_segments.append((j, s, e))
+            finish_time = max(finish_time, max(e for (_, e) in segs))
+            win_cur = _subtract_segments_from_windows(win_cur, segs)
+
+            # Guard: capacity còn lại phải >= nhu cầu còn lại
+            remain_need = sum(processing_times[jobs_order[t]] for t in range(idx + 1, len(jobs_order)))
+            if _total_capacity_windows(win_cur) < remain_need:
+                if debug:
+                    print(f"[DBG] Early prune {direction}: remaining capacity insufficient after job {j}")
+                return None, [], False
+
+        return finish_time, all_segments, True
+
+    # Thử earliest trước, nếu fail thì thử latest
+    fin, segs, ok = try_direction("forward")
+    if ok:
+        return fin, segs, True
+    fin, segs, ok = try_direction("backward")
+    if ok:
+        return fin, segs, True
+    return None, [], False
+
+
+# =============================================
+# Evaluator (job-wise) — returns segments ready to use
+# =============================================
 
 def _evaluate_chromosome(
     chrom: Chromosome,
     model: SchedulingModel,
-    mode: str = "timespan",
+    mode: str = "assign",
     penalty: float = 10**9,
-) -> Tuple[float, Dict[int, int], Dict[int, List[int]]]:
-    """Evaluate chromosome.
+) -> Tuple[float, Dict[int, int], Dict[int, List[int]], Dict[int, List[Tuple[int, int, int]]]]:
+    """
+    Đánh giá theo từng job trên mỗi máy (tuân thủ split_min):
+        - Lấy thứ tự job theo chrom.order và máy theo chrom.machines,
+        - Gom job theo máy (giữ nguyên thứ tự phục vụ),
+        - Duyệt từng máy: cho từng job gọi solver -> lấy segs, trừ capacity, cập nhật finish,
+        - Nếu có job infeasible -> trả penalty.
 
-    Returns:
-        fitness (float): makespan or large penalty if infeasible
-        machine_finish_times (dict m -> finish_time)
-        per_machine_job_order (dict m -> [job ids in order])
+    Trả:
+        fitness, machine_finish_times, per_machine_job_order, per_machine_segments
     """
     num_machines = model.get_num_machines()
     processing_times = model.get_processing_times()
     split_min = model.get_split_min()
-    time_windows = model.get_time_windows()
+    tw_raw = model.get_time_windows()
+    # chuẩn hoá key
+    time_windows = {int(k): v for k, v in tw_raw.items()} if isinstance(tw_raw, dict) else tw_raw
 
-    machine_finish = {}
-    jobs_per_machine = {}
+    # gom job theo máy theo thứ tự phục vụ
+    per_machine_jobs: Dict[int, List[int]] = {m: [] for m in range(num_machines)}
+    for pos, j in enumerate(chrom.order):
+        m = int(chrom.machines[pos])
+        per_machine_jobs[m].append(j)
 
-    for machine_id in range(num_machines):
-        total_process_time, jobs_on_machine_id_in_order = _sum_proc_time_for_machine(
-            chrom.order, chrom.machines, processing_times, machine_id
-        )
-        jobs_per_machine[machine_id] = jobs_on_machine_id_in_order
-        if total_process_time == 0:
-            machine_finish[machine_id] = 0
+    machine_finish: Dict[int, int] = {}
+    per_machine_segments: Dict[int, List[Tuple[int, int, int]]] = {m: [] for m in range(num_machines)}
+
+    for m in range(num_machines):
+        jobs_m = per_machine_jobs[m]
+        if not jobs_m:
+            machine_finish[m] = 0
             continue
+        wins = time_windows[m]
+        if not wins:
+            return float(penalty), {}, {}, {}
+        # debug có thể bật thủ công tại đây nếu cần
+        need_total = sum(processing_times[j] for j in jobs_m)
+        cap_total  = _total_capacity_windows(wins)
+        # if cap_total < need_total:
+            # print(f"[DBG] M{m}: total capacity {cap_total} < total need {need_total}  (jobs={jobs_m})")
 
-        windows_of_machine_id = time_windows[machine_id]
-        if not windows_of_machine_id:
-            # No capacity for any work on this machine
-            return penalty, {}, {}
-
-        # Check feasibility (if requested) then compute finish time
-        if mode == "leftover":
-            feasible, _ = solve_feasible_leftover_rule_cfg(total_process_time, windows_of_machine_id, split_min)
-            if not feasible:
-                return penalty, {}, {}
-            # If feasible, also get the finish time via min_timespan solver (for comparison)
-            finish, _ = solve_min_timespan_cfg(total_process_time, windows_of_machine_id, split_min)
-        elif mode == "timespan":
-            finish, _ = solve_min_timespan_cfg(total_process_time, windows_of_machine_id, split_min)
-        elif mode == "assign":
-            finish, _ = assign_job_to_machine(total_process_time, windows_of_machine_id, split_min)
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-        if finish is None:
-            return penalty, {}, {}
-        machine_finish[machine_id] = int(finish)
+        fin, segs, ok = _assign_jobs_on_machine(jobs_m, processing_times, wins, split_min, mode, debug=False)
+        if not ok or fin is None:
+            # print(f"[DBG] M{m}: assignment failed (mode={mode}). See earlier debug lines for the failing job/chunk.")
+            return float(penalty), {}, {}, {}
+        machine_finish[m] = int(fin)
+        per_machine_segments[m] = segs  # segs đã gắn job id
 
     makespan = max(machine_finish.values()) if machine_finish else 0
-    return float(makespan), machine_finish, jobs_per_machine
+    return float(makespan), machine_finish, per_machine_jobs, per_machine_segments
 
-# =============================================
-# Reconstruct per-job segments by greedy packing across machine windows
-# (We rely on DP for finish time; packing is solely for visualization/report)
-# =============================================
-
-def _pack_jobs_into_windows(
-    jobs_order: List[int],
-    processing_times: List[int],
-    windows: List[List[int]],
-) -> List[Tuple[int, int, int]]:
-    #TODO: change it to DP-based packing or new heuristic
-    """Greedy earliest-fit packing of jobs into absolute windows (start,end).
-
-    Returns list of (job_id, start, end) segments for this machine.
-    This is *only* for visualization; we do not use it to compute the objective.
-    """
-    # Sort windows by start time
-    windows_sorted = sorted(windows, key=lambda w: (w[0], w[1]))
-    # For each window keep a cursor of how much used inside that window
-    cursors = [w[0] for w in windows_sorted]  # current time pointer inside window
-
-    segments: List[Tuple[int, int, int]] = []
-
-    for job in jobs_order:
-        remain = processing_times[job]
-        for idx, (window_start, window_end) in enumerate(windows_sorted):
-            if remain <= 0:
-                break
-            cur = cursors[idx]
-            if cur >= window_end:
-                continue  # window full
-            available_window = window_end - cur
-            if available_window <= 0:
-                continue
-            use = min(available_window, remain)
-            seg_start = cur
-            seg_end = cur + use
-            segments.append((job, seg_start, seg_end))
-            cursors[idx] = seg_end
-            remain -= use
-        # If remain > 0 here, windows were insufficient; this should not happen if DP said feasible
-    return segments
 
 # =============================================
 # GA main loop
@@ -227,6 +456,9 @@ def run_ga(config: SchedulingModel, params: GAParams, mode: str = "assign") -> D
     processing_times = model.get_processing_times()
     time_windows = model.get_time_windows()
 
+    if isinstance(time_windows, dict):
+        time_windows = {int(k): v for k, v in time_windows.items()}
+
     # --- initialize population ---
     def random_chrom() -> Chromosome:
         order = list(range(num_jobs))
@@ -236,16 +468,25 @@ def run_ga(config: SchedulingModel, params: GAParams, mode: str = "assign") -> D
 
     population: List[Chromosome] = [random_chrom() for _ in range(params.pop_size)]
 
+    # >>> REPAIR SAU KHỞI TẠO
+    population = [
+        Chromosome(
+            order=chrom.order[:],
+            machines=_repair_machines(chrom.order, chrom.machines, processing_times, time_windows)
+        )
+        for chrom in population
+    ]
+
     # Evaluate initial population
     fitness: List[float] = []
-    meta_cache: List[Tuple[Dict[int, int], Dict[int, List[int]]]] = []
+    meta_cache: List[Tuple[Dict[int, int], Dict[int, List[int]], Dict[int, List[Tuple[int, int, int]]]]] = []
     for chrom in population:
-        f, mf, pmj = _evaluate_chromosome(chrom, model, mode)
+        f, mf, pmj, pms = _evaluate_chromosome(chrom, model, mode)
         fitness.append(f)
-        meta_cache.append((mf, pmj))
+        meta_cache.append((mf, pmj, pms))
 
     # --- evolution ---
-    for generation in range(params.generations):
+    for _ in range(params.generations):
         # Elitism
         ranked = sorted(zip(population, fitness, meta_cache), key=lambda x: x[1])
         new_pop: List[Chromosome] = [ranked[i][0] for i in range(min(params.elite, len(ranked)))]
@@ -270,6 +511,10 @@ def run_ga(config: SchedulingModel, params: GAParams, mode: str = "assign") -> D
             mutate_machines(c1.machines, num_machines, params.mutation_rate_mach)
             mutate_machines(c2.machines, num_machines, params.mutation_rate_mach)
 
+            # >>> REPAIR TRƯỚC KHI THÊM VÀO POP
+            c1.machines = _repair_machines(c1.order, c1.machines, processing_times, time_windows)
+            c2.machines = _repair_machines(c2.order, c2.machines, processing_times, time_windows)
+
             new_pop.append(c1)
             if len(new_pop) < params.pop_size:
                 new_pop.append(c2)
@@ -281,26 +526,27 @@ def run_ga(config: SchedulingModel, params: GAParams, mode: str = "assign") -> D
         fitness = []
         meta_cache = []
         for chrom in population:
-            f, mf, pmj = _evaluate_chromosome(chrom, model, mode)
+            f, mf, pmj, pms = _evaluate_chromosome(chrom, model, mode)
             fitness.append(f)
-            meta_cache.append((mf, pmj))
+            meta_cache.append((mf, pmj, pms))
 
     # --- choose the best ---
     best_idx = min(range(len(population)), key=lambda i: fitness[i])
     best = population[best_idx]
     best_fit = fitness[best_idx]
-    best_machine_finish, best_per_m_jobs = meta_cache[best_idx]
+    best_machine_finish, best_per_m_jobs, best_per_m_segments = meta_cache[best_idx]
 
-    # Reconstruct segments for report (visualization only)
-    per_machine_segments: Dict[int, List[Tuple[int, int, int]]] = {}
-    for machine_id in range(num_machines):
-        jobs_on_m = best_per_m_jobs[machine_id]
-        if not jobs_on_m:
-            per_machine_segments[machine_id] = []
-            continue
-        windows_m = time_windows[machine_id]
-        segments = _pack_jobs_into_windows(jobs_on_m, processing_times, windows_m)
-        per_machine_segments[machine_id] = segments
+    def _keys_to_int(d):
+        try:
+            return {int(k): v for k, v in d.items()}
+        except Exception:
+            return d
+
+    best_per_m_jobs = _keys_to_int(best_per_m_jobs)
+    best_machine_finish = _keys_to_int(best_machine_finish)
+    best_per_m_segments = {int(k): v for k, v in best_per_m_segments.items()}
+
+    per_machine_segments = best_per_m_segments  # đã đúng split_min & khả thi
 
     result = {
         "makespan": int(best_fit),
@@ -317,8 +563,8 @@ def run_ga(config: SchedulingModel, params: GAParams, mode: str = "assign") -> D
 # =============================================
 
 def _ascii_gantt(per_machine_segments: Dict[int, List[Tuple[int, int, int]]],
-                time_windows: Dict[int, List[List[int]]],
-                width_limit: int = 120) -> str:
+                    time_windows: Dict[int, List[List[int]]],
+                    width_limit: int = 120) -> str:
     """Draw a minimal ASCII Gantt. Each machine on one row.
     We compute the horizon from its windows. If the horizon is too large, we scale down.
     """

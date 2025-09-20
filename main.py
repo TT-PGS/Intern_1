@@ -106,7 +106,6 @@ def main():
     if args.mode not in ["all_1", "all_2"]:
         io_json_input_file_path = args.config
         cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
-
     # Mode resolution
     mode = (args.mode).lower()
     if mode not in ["dqn", "fcfs", "sa", "ga", "all_1", "all_2"]:
@@ -197,13 +196,10 @@ def main():
             tournament_k=args.ga_tk,
             crossover_rate=args.ga_cx,
             mutation_rate_perm=args.ga_mut,
-            # mutation_rate_mach giữ default=0.05 trong GAParams (TODO:có thể thêm tham số riêng sau)
-            # elite giữ default=2
             seed=args.ga_seed,
         )
-
         ga_res = run_ga(cfg, params, mode=args.split_mode)
-
+        
         print(f"Mode: {args.split_mode}")
         print(f"Makespan: {ga_res['makespan']}")
         print(f"Best order: {ga_res['order']}")
@@ -270,108 +266,138 @@ def main():
         sa_config = "configs/SA_configs.json"
         ga_config = "configs/GA_configs.json"
 
+        '''Identify new datasets that haven't been processed yet.'''
+        seeds = [x for x in os.listdir(datasets_folder) if os.path.isdir(os.path.join(datasets_folder, x))]
+        old_seeds = [x for x in os.listdir(output_folder) if os.path.isdir(os.path.join(output_folder, x))]
+        new_seeds = [x for x in seeds if x not in old_seeds]
+
+        '''Load SA and GA parameters from config files.'''
         with open(sa_config) as f:
             sa_params = json.load(f)
 
         with open(ga_config) as f:
             ga_params = json.load(f)
 
-        for file_name in glob.glob(os.path.join(datasets_folder, "**", "*.json"), recursive=True):
+        index = 1
+
+        '''Process each new dataset.'''
+        for seed in new_seeds:
             '''
-            Create subfolder in output_folder based on the dataset's seed (parent folder name).
-            This organizes results by dataset for easier analysis.
-            E.g., datasets/20250616/42.json -> metrics/20250616/42.json
+                Create subfolder in output_folder based on the dataset's seed (parent folder name).
+                This organizes results by dataset for easier analysis.
+                E.g., datasets/20250616/42.json -> metrics/20250616/42.json
             '''
-            seed_of_input = file_name.split("/")[-2]
-            output_subfolder = os.path.join(output_folder, seed_of_input)
+            datasets_seedfolder = os.path.join(datasets_folder, seed)
+            print(f"\n\n=== Processing datasets in folder: {datasets_seedfolder} ===")
+            output_subfolder = os.path.join(output_folder, seed)
             os.makedirs(output_subfolder, exist_ok=True)
-            output_file_path = os.path.join(output_subfolder, os.path.basename(file_name))
 
-            '''
-                Run FCFS, SA, GA in sequence for the current dataset.
-                Collect results and write to a single JSON file in output_subfolder.
-            '''
-            print(f"\n\n=== Processing dataset: {file_name} ===")
-            io_json_input_file_path = file_name
-            cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
-            cfg_fcfs = deepcopy(cfg)
-            cfg_sa = deepcopy(cfg)
-            cfg_ga = deepcopy(cfg)
-            lower_bound = cfg.get_lower_bound()
+            for file_name in os.listdir(datasets_seedfolder):
+                print(f"\n\n=== Processing sample: {file_name} === index: {index}")
+                index += 1
+                output_file_path = os.path.join(output_subfolder, os.path.basename(file_name))
+                '''
+                    Run FCFS, SA, GA in sequence for the current dataset.
+                    Collect results and write to a single JSON file in output_subfolder.
 
-            '''================ FCFS ================'''
-            start_fcfs = time.time()
-            res_fcfs = schedule_fcfs(cfg_fcfs, mode=split_mode)
-            end_fcfs = time.time()
-            processing_time_fcfs = end_fcfs - start_fcfs
-            percentage_gap_fcfs = (res_fcfs["makespan"] - lower_bound) * 100 / lower_bound
+                    IMPORTANT: các giải thuật chạy cùng seed để dễ so sánh và ổn định - default: 20250609
+                '''
+                io_json_input_file_path = os.path.join(datasets_seedfolder, file_name)
+                cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
+                cfg_fcfs = deepcopy(cfg)
+                cfg_sa = deepcopy(cfg)
+                cfg_ga = deepcopy(cfg)
+                lower_bound = cfg.get_lower_bound()
 
-            '''================ SA ================'''
-            start_sa = time.time()
-            res_sa = schedule_sa_config(
-                cfg_sa,
-                mode=split_mode,
-                Tmax=sa_params["sa"].get("Tmax"),
-                Tthreshold=sa_params["sa"].get("Tthreshold"),
-                alpha=sa_params["sa"].get("alpha"),
-                moves_per_T=sa_params["sa"].get("moves_per_T"),
-                seed=seed_of_input,
-                verbose=sa_params["sa"].get("verbose"),
-            )
-            end_sa = time.time()
-            processing_time_sa = end_sa - start_sa
-            percentage_gap_sa = (res_sa["best_makespan"] - lower_bound) * 100 / lower_bound
+                '''================ FCFS ================'''
+                start_fcfs = time.time()
+                res_fcfs = schedule_fcfs(cfg_fcfs, mode=split_mode)
+                end_fcfs = time.time()
+                processing_time_fcfs = end_fcfs - start_fcfs
+                percentage_gap_fcfs = (res_fcfs["makespan"] - lower_bound) * 100 / lower_bound
 
-            '''================ GA ================'''
-            params = GAParams(
-                pop_size=ga_params["ga"].get("pop_size"),
-                generations=ga_params["ga"].get("generations"),
-                tournament_k=ga_params["ga"].get("tournament_k"),
-                crossover_rate=ga_params["ga"].get("crossover_rate"),
-                mutation_rate_perm=ga_params["ga"].get("mutation_rate_perm"),
-                seed=seed_of_input,
-            )
-            start_ga = time.time()
-            res_ga = run_ga(cfg_ga, params, mode=split_mode)
-            end_ga = time.time()
-            processing_time_ga = end_ga - start_ga
-            percentage_gap_ga = (res_ga["makespan"] - lower_bound) * 100 / lower_bound
+                '''================ SA ================'''
+                start_sa = time.time()
+                res_sa = schedule_sa_config(
+                    cfg_sa,
+                    mode=split_mode,
+                    Tmax=sa_params["sa"].get("Tmax"),
+                    Tthreshold=sa_params["sa"].get("Tthreshold"),
+                    alpha=sa_params["sa"].get("alpha"),
+                    moves_per_T=sa_params["sa"].get("moves_per_T"),
+                    seed=20250609,
+                    verbose=sa_params["sa"].get("verbose"),
+                )
+                end_sa = time.time()
+                processing_time_sa = end_sa - start_sa
+                percentage_gap_sa = (res_sa["best_makespan"] - lower_bound) * 100 / lower_bound
 
-            payload = {
-                "dataset": os.path.basename(file_name),
-                "lower_bound": lower_bound,
-                "split_mode": split_mode,
-                "fcfs_results": {
-                    "makespan": res_fcfs["makespan"],
-                    "assignments": res_fcfs["assignments"],
-                    "final_windows": res_fcfs["final_windows"],
-                    "processing_time_milliseconds": processing_time_fcfs * 1000,
-                    "percentage_gap": percentage_gap_fcfs,
-                },
-                "sa_results": {
-                    "best_order": res_sa.get("best_order"),
-                    "makespan": res_sa.get("best_makespan"),
-                    "assignments": res_sa.get("assignments"),
-                    "final_windows": res_sa.get("final_windows"),
-                    "processing_time_milliseconds": processing_time_sa * 1000,
-                    "percentage_gap": percentage_gap_sa,
-                },
-                "ga_results": {
-                    "best_genome": {
-                        "order": res_ga.get("order"),
-                        "machine_genes": res_ga.get("machines"),
+                '''================ GA ================'''
+                params = GAParams(
+                    pop_size=ga_params["ga"].get("pop_size"),
+                    generations=ga_params["ga"].get("generations"),
+                    tournament_k=ga_params["ga"].get("tournament_k"),
+                    crossover_rate=ga_params["ga"].get("crossover_rate"),
+                    mutation_rate_perm=ga_params["ga"].get("mutation_rate_perm"),
+                    seed=20250609,
+                )
+                start_ga = time.time()
+                res_ga = run_ga(cfg_ga, params, mode=split_mode)
+                end_ga = time.time()
+                processing_time_ga = end_ga - start_ga
+                percentage_gap_ga = (res_ga["makespan"] - lower_bound) * 100 / lower_bound
+
+                assignments_ga = []
+                for m, segs in res_ga.get("per_machine_segments").items():
+                    by_job = {}
+                    for (j, s, e) in segs:
+                        by_job.setdefault(j, []).append((0, s, e))  # win_idx=0 (không cần trong viz)
+                    for j, seg_list in by_job.items():
+                        finish = max(e for (_w, s, e) in seg_list)
+                        assignments_ga.append({
+                            "job": j,
+                            "machine": m,
+                            "segments": seg_list,
+                            "finish": finish,
+                            "fragments": len(seg_list),
+                        })
+
+                payload = {
+                    "dataset": os.path.basename(file_name),
+                    "lower_bound": lower_bound,
+                    "split_mode": split_mode,
+                    "seed_used_on_sa_and_ga": 20250609,
+                    "fcfs_results": {
+                        "makespan": res_fcfs["makespan"],
+                        "assignments": res_fcfs["assignments"],
+                        "final_windows": res_fcfs["final_windows"],
+                        "processing_time_milliseconds": processing_time_fcfs * 1000,
+                        "percentage_gap": percentage_gap_fcfs,
                     },
-                    "makespan": res_ga.get("makespan"),
-                    "assignments": res_ga.get("assignments"),
-                    "machine_finish_times": res_ga.get("machine_finish_times"),
-                    "per_machine_jobs": res_ga.get("per_machine_jobs"),
-                    "per_machine_segments": res_ga.get("per_machine_segments"),
-                    "processing_time_milliseconds": processing_time_ga * 1000,
-                    "percentage_gap": percentage_gap_ga,
-                },
-            }
+                    "sa_results": {
+                        "best_order": res_sa.get("best_order"),
+                        "makespan": res_sa.get("best_makespan"),
+                        "assignments": res_sa.get("assignments"),
+                        "final_windows": res_sa.get("final_windows"),
+                        "processing_time_milliseconds": processing_time_sa * 1000,
+                        "percentage_gap": percentage_gap_sa,
+                    },
+                    "ga_results": {
+                        "best_genome": {
+                            "order": res_ga.get("order"),
+                            "machine_genes": res_ga.get("machines"),
+                        },
+                        "makespan": res_ga.get("makespan"),
+                        "assignments": assignments_ga,
+                        "machine_finish_times": res_ga.get("machine_finish_times"),
+                        "per_machine_jobs": res_ga.get("per_machine_jobs"),
+                        "per_machine_segments": res_ga.get("per_machine_segments"),
+                        "processing_time_milliseconds": processing_time_ga * 1000,
+                        "percentage_gap": percentage_gap_ga,
+                    },
+                }
 
-            write_output_results(output_file_path, payload)
+                write_output_results(output_file_path, payload)
 
     if mode == "all_2":
         """

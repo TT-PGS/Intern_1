@@ -213,3 +213,5 @@ qnet.pt
 ga_demo_log.jsonl
 datasets/**/*.json
 metrics/**/*.json
+results_*.json
+
