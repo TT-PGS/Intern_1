@@ -144,7 +144,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.test_env/
+.testenv/
 
 # Spyder project settings
 .spyderproject
@@ -217,4 +217,3 @@ ga_demo_log.jsonl
 datasets/**/*.json
 metrics/**/*.json
 results_*.json
-

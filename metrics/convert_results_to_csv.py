@@ -47,6 +47,12 @@ def extract_summary_rows(doc: Dict[str, Any], src_file: str) -> Iterable[List[An
     split_mode = doc.get("split_mode")
     seed = doc.get("seed_used_on_sa_and_ga")
 
+    data = dataset.replace(".json", "").split("_")
+    num_of_job = data[2]
+    num_of_machine = data[4]
+    splitmin = data[6]
+    index_sample = data[8]
+
     for algokey in ALGOKEYS:
         if algokey not in doc:
             continue
@@ -69,6 +75,10 @@ def extract_summary_rows(doc: Dict[str, Any], src_file: str) -> Iterable[List[An
         yield [
             os.path.basename(src_file),
             dataset,
+            num_of_job,
+            num_of_machine,
+            splitmin,
+            index_sample,
             lower_bound,
             split_mode,
             algo_name,
@@ -81,6 +91,13 @@ def extract_summary_rows(doc: Dict[str, Any], src_file: str) -> Iterable[List[An
 
 def extract_assignment_rows(doc: Dict[str, Any], src_file: str) -> Iterable[List[Any]]:
     dataset = doc.get("dataset")
+
+    data = dataset.replace(".json", "").split("_")
+    num_of_job = data[2]
+    num_of_machine = data[4]
+    splitmin = data[6]
+    index_sample = data[8]
+
     for algokey in ALGOKEYS:
         if algokey not in doc:
             continue
@@ -103,6 +120,10 @@ def extract_assignment_rows(doc: Dict[str, Any], src_file: str) -> Iterable[List
             yield [
                 os.path.basename(src_file),
                 dataset,
+                num_of_job,
+                num_of_machine,
+                splitmin,
+                index_sample,
                 algo_name,
                 job,
                 machine,
@@ -120,7 +141,8 @@ def main():
     parser.add_argument("--pattern", type=str, default="*.json", help="Glob pattern for JSON files")
     args = parser.parse_args()
 
-    json_files = sorted(glob(os.path.join(args.input_dir, args.pattern)))
+    json_files = sorted(glob(os.path.join(args.input_dir, "**", args.pattern)))
+    print(f"Total files: {len(json_files)}")
     if not json_files:
         print(f"[INFO] No JSON files found in: {args.input_dir} with pattern: {args.pattern}")
         return
@@ -129,6 +151,10 @@ def main():
     summary_header = [
         "source_file",
         "dataset",
+        "num_of_job",
+        "num_of_machine",
+        "splitmin",
+        "index_sample",
         "lower_bound",
         "split_mode",
         "algo",
@@ -141,6 +167,10 @@ def main():
     assignments_header = [
         "source_file",
         "dataset",
+        "num_of_job",
+        "num_of_machine",
+        "splitmin",
+        "index_sample",
         "algo",
         "job",
         "machine",

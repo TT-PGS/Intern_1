@@ -15,7 +15,7 @@ Intern_1/
 │   ├── agent_base.py               # AgentBase: giao diện chung cho agent
 │   ├── io_handler.py               # IOHandler: xử lý input/output (load file json, ...)
 │   ├── model.py                    # SchedulingModel: mô tả bài toán
-│   ├── runner.py                   # run_episode(): vòng lặp tương tác agent-env
+│   └── runner.py                   # run_episode(): vòng lặp tương tác agent-env
 │
 ├── agents/                         # 🤖 Các agent cụ thể kế thừa từ AgentBase
 │   ├── dqn_agent.py                # 🤖 Định nghĩa DQNAgent
@@ -27,16 +27,15 @@ Intern_1/
 ├── envs/                           # 🌍 Môi trường RL cụ thể (theo chuẩn gym)
 │   └── simple_split_env.py         # SimpleSplitSchedulingEnv
 │
-├── datasets/                        # ⚙️ Các file config YAML/JSON để cấu hình model
-│   ├── splittable_jobs.json        # Config cho số job, máy, size theo định dạng json
-│   └── input_10_2_4_1.json         # 1 testcase chạy thử, lấy từ code MinSplit (thoả các điều kiện của testcase trong bài báo)
+├── datasets/                        # 📁 Chứa các tập samples
+│   └── gen_twspwjp_dataset.py       # file gen các tập samples (thoả các điều kiện của testcase trong bài báo)
 │
-├── configs/                        # Chứa các config
+├── configs/                        # ⚙️ Chứa các config
 │   ├── SA_config.json              # Config của SA
 │   └── GA_config.json              # Config của GA
 │
 ├── metrics/                        # 📈 Chứa kết quả chạy của các giải thuật trong datasets và các phân tích đánh giá
-│   └── evaluator.py                # Tính metrics từ lịch/schedule
+│   └── convert_results_to_csv.py   # tạo file csv từ results
 │
 ├── logger/                         # 📊 Module ghi dữ liệu training dưới dạng số liệu - Hiện tại chưa có #TODO
 │   ├── structured_logger.py        # Log dạng JSON-line, Prometheus-style, Influx, etc.
@@ -64,16 +63,16 @@ source /home/a/PGS/Intern_1/MinSplit/bin/activate
 
 #### 1. For running DQN (not success yet)
 
-python -m main --mode dqn --config ./datasets/input_10_2_4_1.json --dqn-episodes 10 --dqn-model qnet.pt
+python -m main --mode dqn --config <input .json file> --dqn-episodes 10 --dqn-model qnet.pt
 
 #### 2. For running GA
 
-python -m main --mode ga --config ./datasets/input_10_2_4_1.json --split-mode assign --ga-pop 40 --ga-gen 200 --ga-cx 0.9 --ga-mut 0.2 --ga-tk 5 --ga-seed 42 --ga-verbose --out ./results_ga.json
+python -m main --mode ga --config <input .json file> --split-mode assign --ga-pop 40 --ga-gen 200 --ga-cx 0.9 --ga-mut 0.2 --ga-tk 5 --ga-seed 42 --ga-verbose --out ./results_ga.json
 
 #### 3. For running SA
 
-python -m main --mode sa --config ./datasets/input_10_2_4_1.json --split-mode assign --sa-Tmax 500 --sa-Tthreshold 1 --sa-alpha 0.99 --sa-moves-per-T 50 --sa-seed 42 --out ./results_sa.json
+python -m main --mode sa --config <input .json file> --split-mode assign --sa-Tmax 500 --sa-Tthreshold 1 --sa-alpha 0.99 --sa-moves-per-T 50 --sa-seed 42 --out ./results_sa.json
 
 #### 4. For running FCFS
 
-python -m main --mode fcfs --config ./datasets/input_10_2_4_1.json --split-mode assign --out ./results_fcfs.json
+python -m main --mode fcfs --config <input .json file> --split-mode assign --out ./results_fcfs.json
