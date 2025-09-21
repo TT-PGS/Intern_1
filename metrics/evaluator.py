@@ -1,29 +1,20 @@
-"""
-Trích xuất results thành file csv
-"""
+import pandas as pd
 
-import csv
-import json
-import os
-from glob import glob
-from typing import Any, Dict, Iterable, List, Optional
+# Đọc file CSV
+df = pd.read_csv("summary_0609_0611.csv")
 
-#========================== helpers ==========================
+# Nhóm theo 4 cột và tính trung bình
+grouped = (
+    df.groupby(["num_of_job", "num_of_machine", "splitmin", "algo"])
+      .agg(
+          avg_percentage_gap=("percentage_gap", "mean"),
+          avg_processing_time_ms=("processing_time_ms", "mean"),
+          count=("percentage_gap", "count")  # số hàng trong nhóm
+      )
+      .reset_index()
+)
 
-def read_json(path: str) -> Optional[Dict[str, Any]]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[WARN] Failed to parse JSON: {path} ({e})")
-        return None
+# Xuất ra file mới
+grouped.to_csv("summary_results.csv", index=False)
 
-#========================== main process ==========================
-i = 0
-
-results_folder = "metrics"
-
-for file_name in glob(os.path.join(results_folder, "**", "*.json"), recursive=True):
-    print(file_name)
-    i += 1
-print(f"total files: {i}")
+print(grouped.head())
