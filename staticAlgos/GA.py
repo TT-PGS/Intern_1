@@ -242,75 +242,103 @@ def _machine_total_capacity(time_windows: Dict[int, List[List[int]]]) -> Dict[in
     return {m: sum(max(0, we - ws) for (ws, we) in sorted(wins)) for m, wins in time_windows.items()}
 
 def _repair_machines(order: List[int],
-                        machines: List[int],
-                        processing_times: List[int],
-                        time_windows: Dict[int, List[List[int]]]) -> List[int]:
+                     machines: List[int],
+                     processing_times: List[int],
+                     time_windows: Dict[int, List[List[int]]],
+                     max_rounds: int = 3_0,   # ~ O(num_jobs), có thể tăng tới 3*num_jobs
+                     ) -> List[int]:
     """
-    Sửa vector machines (gán máy) theo hướng capacity-aware:
-        - Tính tổng tải theo máy (sum p_j các job đang gán lên máy)
-        - Nếu máy nào vượt capacity, chuyển bớt job sang máy còn dư nhiều nhất
-        - Chọn job chuyển: job có p_j lớn nhất ở máy đang quá tải, duyệt cho tới khi hết quá tải
-    Trả về bản sao machines đã sửa (không mutate tham số gốc).
+    Cân bằng vector machines theo capacity từng máy, có 'phanh' để tránh kẹt:
+    - Mỗi vòng chỉ xét máy quá tải nhất và máy còn dư nhiều nhất.
+    - Chỉ chấp nhận move nếu giảm tổng overload.
+    - Giới hạn số vòng sửa.
     """
+    from heapq import heappush, heappop
+
     num_jobs = len(order)
     mach_fixed = machines[:]  # copy
 
-    # capacity mỗi máy
-    cap = _machine_total_capacity(time_windows)
-
-    # tổng tải hiện tại theo máy
+    # 1) capacity và load ban đầu
+    cap = _machine_total_capacity(time_windows)  # m -> int
     load: Dict[int, int] = {m: 0 for m in cap.keys()}
-    jobs_on_m: Dict[int, List[Tuple[int,int]]] = {m: [] for m in cap.keys()}  # (pos, p_j)
+    jobs_on_m: Dict[int, List[Tuple[int, int]]] = {m: [] for m in cap.keys()}  # (pos, p_j)
+
     for pos, j in enumerate(order):
         m = mach_fixed[pos]
         pj = processing_times[j]
-        load[m] += pj
-        jobs_on_m[m].append((pos, pj))
+        load[m] = load.get(m, 0) + pj
+        jobs_on_m.setdefault(m, []).append((pos, pj))
 
-    # máy có thể không có trong dict nếu key windows là list 0..M-1
-    # => đảm bảo đầy đủ key
-    for m in range(max(cap.keys())+1):
+    for m in range(max(cap.keys()) + 1):
         load.setdefault(m, 0)
         jobs_on_m.setdefault(m, [])
 
-    # lặp tới khi tất cả máy không quá tải hoặc không chuyển được nữa
-    changed = True
-    while changed:
-        changed = False
-        # tìm máy quá tải nhất
-        over_machines = [(m, load[m] - cap.get(m, 0)) for m in load if load[m] > cap.get(m, 0)]
-        if not over_machines:
+    def total_overload() -> int:
+        return sum(max(0, load[m] - cap.get(m, 0)) for m in load)
+
+    def build_heaps():
+        # max-heap mô phỏng bằng số âm
+        over_heap = []   # (-overload, m) với overload > 0
+        under_heap = []  # (-under, m)   với under > 0
+        for m in load:
+            ov = load[m] - cap.get(m, 0)
+            if ov > 0:
+                heappush(over_heap, (-ov, m))
+            else:
+                un = -ov
+                if un > 0:
+                    heappush(under_heap, (-un, m))
+        return over_heap, under_heap
+
+    best_over = total_overload()
+    rounds = 0
+
+    while best_over > 0 and rounds < max_rounds:
+        over_heap, under_heap = build_heaps()
+        if not over_heap or not under_heap:
             break
-        # sắp xếp giảm dần theo mức vượt
-        over_machines.sort(key=lambda x: x[1], reverse=True)
 
-        for m_over, excess in over_machines:
-            if excess <= 0:
-                continue
-            # ứng viên nhận: máy còn dư capacity nhiều nhất
-            under = [(m2, cap.get(m2, 0) - load[m2]) for m2 in load if cap.get(m2, 0) - load[m2] > 0 and m2 != m_over]
-            if not under:
-                # không có máy nhận -> hết cách sửa
-                continue
-            under.sort(key=lambda x: x[1], reverse=True)
-            receiver = under[0][0]
+        _, m_over = over_heap[0]
+        _, m_under = under_heap[0]
 
-            # chọn job lớn nhất trên m_over để giảm nhanh
-            if not jobs_on_m[m_over]:
-                continue
-            jobs_on_m[m_over].sort(key=lambda t: t[1], reverse=True)  # by pj desc
-            pos_move, pj_move = jobs_on_m[m_over][0]
+        # Free chỗ nhận
+        free = cap[m_under] - load[m_under]
+        if free <= 0 or not jobs_on_m[m_over]:
+            break
 
-            # chuyển
-            mach_fixed[pos_move] = receiver
-            jobs_on_m[m_over].pop(0)
-            jobs_on_m[receiver].append((pos_move, pj_move))
-            load[m_over] -= pj_move
-            load[receiver] += pj_move
-            changed = True
+        cand = sorted(jobs_on_m[m_over], key=lambda t: t[1])  # (pos, pj) asc
+        pos_move, pj_move = None, None
+        for pos, pj in cand:
+            if pj <= free:
+                pos_move, pj_move = pos, pj
+                break
+        if pos_move is None:
+            pos_move, pj_move = cand[0]
 
+        prev_over = best_over
+
+        mach_fixed[pos_move] = m_under
+        for idx, (pp, _) in enumerate(jobs_on_m[m_over]):
+            if pp == pos_move:
+                jobs_on_m[m_over].pop(idx)
+                break
+        jobs_on_m[m_under].append((pos_move, pj_move))
+
+        load[m_over] -= pj_move
+        load[m_under] += pj_move
+
+        new_over = total_overload()
+        if new_over < prev_over:
+            best_over = new_over
+            rounds += 1
+        else:
+            mach_fixed[pos_move] = machines[pos_move]
+            jobs_on_m[m_under].pop()
+            jobs_on_m[m_over].append((pos_move, pj_move))
+            load[m_over] += pj_move
+            load[m_under] -= pj_move
+            break
     return mach_fixed
-
 
 def _assign_jobs_on_machine(jobs_order: List[int],
                             processing_times: List[int],
