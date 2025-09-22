@@ -14,13 +14,13 @@ class DQNAgent(AgentBase):
         self,
         state_dim: int,
         action_dim: int,
-        lr: float = 1e-3,
+        lr: float = 1e-4,
         gamma: float = 0.99,
-        epsilon: float = 1.0,
+        epsilon: float = 0.2,
         buffer_size: int = 10000,
-        batch_size: int = 64,
+        batch_size: int = 32,
         target_update: str = "hard",
-        tau: float = 0.005,
+        # tau: float = 0.005,
     ):
         self.action_dim = int(action_dim)
         self.gamma = float(gamma)
@@ -29,7 +29,7 @@ class DQNAgent(AgentBase):
         self.epsilon_decay = 0.995
         self.batch_size = int(batch_size)
         self.target_update = target_update
-        self.tau = float(tau)
+        # self.tau = float(tau)
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -41,15 +41,23 @@ class DQNAgent(AgentBase):
         self.optimizer = torch.optim.Adam(self.q_net.parameters(), lr=lr)
         self.replay_buffer = ReplayBuffer(buffer_size)
 
+        self.heuristic_fn = None  # kỳ vọng chữ ký: fn(state, mask) -> Optional[int]
+
     # --------------------------------------------------------------------- #
     #  Action selection: epsilon-greedy on Q(s,·) with optional action mask #
     # --------------------------------------------------------------------- #
-    def select_action(self, state, mask=None) -> int:
+    def attach_env(self, env):
+        """Gọi 1 lần sau khi tạo agent: agent.attach_env(env)."""
+        if hasattr(env, "suggest_action_earliest"):
+            self.heuristic_fn = env.suggest_action_earliest
+
+    def select_action(self, state, mask) -> int:
         """
         state: np.ndarray or torch.Tensor shape (S,) or (1,S)
-        mask: Optional[np.ndarray] shape (A,), 1 = valid, 0 = invalid
+        mask: np.ndarray shape (A,), 1 = valid, 0 = invalid
         returns: action index int in [0, action_dim-1]
         """
+        # Chuẩn hóa state -> tensor (1,S)
         if not torch.is_tensor(state):
             state_t = torch.as_tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         else:
@@ -57,25 +65,38 @@ class DQNAgent(AgentBase):
             if state_t.dim() == 1:
                 state_t = state_t.unsqueeze(0)
 
-        # explore
-        if np.random.rand() < self.epsilon:
-            if mask is not None:
-                mask_arr = np.asarray(mask).astype(bool)
-                valid_idx = np.flatnonzero(mask_arr)
-                if len(valid_idx) == 0:
-                    return int(np.random.randint(self.action_dim))
-                return int(np.random.choice(valid_idx))
+        mask_arr = np.asarray(mask).astype(bool).reshape(-1)
+        valid_idx = np.flatnonzero(mask_arr)
+        if valid_idx.size == 0:
             return int(np.random.randint(self.action_dim))
 
-        # exploit
+        # -------- explore --------
+        if np.random.rand() < self.epsilon:
+            # thử dùng hint từ env trước
+            if self.heuristic_fn is not None:
+                hinted = self.heuristic_fn(state_t.squeeze(0).detach().cpu().numpy(), mask_arr)
+                if hinted is not None and mask_arr[int(hinted)]:
+                    action = int(hinted)
+                else:
+                    # fallback random trong mask nếu hint không khả dụng
+                    action = int(np.random.choice(valid_idx))
+            else:
+                action = int(np.random.choice(valid_idx))
+
+            # decay epsilon
+            self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+            return action
+
+        # -------- exploit --------
         with torch.no_grad():
             q_all = self.q_net(state_t).squeeze(0)  # (A,)
-            if mask is not None:
-                mask_t = torch.as_tensor(mask, dtype=torch.bool, device=q_all.device)
-                # penalize invalid actions
-                q_all = torch.where(mask_t, q_all, torch.full_like(q_all, -1e9))
+            mask_t = torch.as_tensor(mask_arr, dtype=torch.bool, device=q_all.device)
+            q_all = torch.where(mask_t, q_all, torch.full_like(q_all, -1e9))
             action = int(torch.argmax(q_all).item())
-            return action
+
+        # decay epsilon
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+        return action
 
     # ------------------------------------------------------------- #
     #                 Replay & one-step online update               #
@@ -137,6 +158,6 @@ class DQNAgent(AgentBase):
     def update_target_net(self):
         if self.target_update == "hard":
             self.target_net.load_state_dict(self.q_net.state_dict())
-        else:
-            # soft mode đã update mỗi step; vẫn có thể force đồng bộ nếu muốn
-            self.target_net.load_state_dict(self.q_net.state_dict())
+        # else:
+        #     # soft mode đã update mỗi step; vẫn có thể force đồng bộ nếu muốn
+        #     self.target_net.load_state_dict(self.q_net.state_dict())

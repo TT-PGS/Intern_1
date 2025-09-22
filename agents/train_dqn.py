@@ -1,6 +1,5 @@
-import os
-from typing import List, Optional
-import random
+import os, glob, random
+from typing import List, Optional, Union
 import numpy as np
 import torch
 
@@ -9,7 +8,29 @@ from envs.simple_split_env import SimpleSplitSchedulingEnv
 from base.io_handler import ReadJsonIOHandler
 from base.runner import run_episode
 
-# ---------------- helpers ----------------
+base_dir = os.path.dirname(os.path.abspath(__file__))
+trained_model_output_path = os.path.join(base_dir, "..", "checkpoints")
+os.makedirs(trained_model_output_path, exist_ok=True)
+
+def as_cfg_list(paths: Union[str, List[str]]) -> List[str]:
+    if isinstance(paths, list):
+        return paths
+    # allow glob or single file
+    if any(ch in paths for ch in ["*", "?", "["]):
+        return sorted(glob.glob(paths))
+    if os.path.isdir(paths):
+        return sorted(glob.glob(os.path.join(paths, "*.json")))
+    return [paths]
+
+def scan_caps(cfg_files: List[str]) -> tuple[int, int]:
+    N_MAX, M_MAX = 0, 0
+    for p in cfg_files:
+        io = ReadJsonIOHandler(p)
+        m = io.get_input()
+        N_MAX = max(N_MAX, m.get_num_jobs())
+        M_MAX = max(M_MAX, m.get_num_machines())
+    return N_MAX, M_MAX
+
 def set_seed(seed: Optional[int] = None) -> None:
     if seed is None:
         return
@@ -19,77 +40,102 @@ def set_seed(seed: Optional[int] = None) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-# -------------- training -----------------
+def make_env(cfg_path: str, N_MAX: int, M_MAX: int, verbose: bool = False) -> SimpleSplitSchedulingEnv:
+    model_obj = ReadJsonIOHandler(cfg_path).get_input()
+    return SimpleSplitSchedulingEnv(model_obj, mode="assign", verbose=verbose, n_max=N_MAX, m_max=M_MAX)
+
 def train_dqn(
-    model_config_path: str,
+    model_config_paths: Union[str, List[str]],
     model_save_path: str = "qnet.pt",
-    episodes: int = 500,
-    seed: Optional[int] = None,
+    episodes: int = 5000,
+    seed: int = 20250609,
+    eval_k: int = 30,  # evaluate on K random cfgs
 ):
     """
-    Train DQN + chọn model theo eval greedy (ε=0) sau mỗi episode.
+    Multi-env DQN training with fixed (N_MAX, M_MAX) via padding+mask.
+    Each episode samples one cfg to build env but uses the SAME agent (fixed dims).
     """
     set_seed(seed)
 
-    io = ReadJsonIOHandler(model_config_path)
-    model_obj = io.get_input()
+    cfg_files = as_cfg_list(model_config_paths)
+    list_datasets = as_cfg_list(os.path.join("datasets/90/"))
+    assert len(cfg_files) > 0, "No config files found."
+    N_MAX, M_MAX = scan_caps(cfg_files)
 
-    # Train env
-    # Set verbose = False khi test xong
-    env = SimpleSplitSchedulingEnv(model_obj, verbose=True)
+    # Build a probe env to get fixed dims
+    probe_env = make_env(cfg_files[0], N_MAX, M_MAX, verbose=False)
+    state_dim, action_dim = probe_env.state_dim(), probe_env.action_dim()
+    print(f"[train_dqn] Fixed dims with padding: state_dim={state_dim} action_dim={action_dim} "
+          f"(N_MAX={N_MAX}, M_MAX={M_MAX}; cfgs={len(cfg_files)})")
 
-    state_dim = env.state_dim()
-    action_dim = env.action_dim()
-    print(f"[train_dqn] state_dim={state_dim} action_dim={action_dim}")
-
+    # Create shared agent with fixed dims
     agent = create_agent("dqn", state_dim, action_dim)
 
     best_eval_reward = float("-inf")
     train_rewards: List[float] = []
     eval_rewards: List[float] = []
 
-    for ep in range(episodes):
-        # ---- Train episode (epsilon-greedy, có học) ----
-        train_result = run_episode(env, agent)
-        tr = float(train_result["total_reward"])
-        train_rewards.append(tr)
-        print(f"Ep {ep:03d} | Train reward: {tr:.2f}")
+    for i in range(len(cfg_files)):
+        for ep in range(episodes):
+            # ---- sample one cfg for training episode ----
+            cfg_path = random.choice(list_datasets)
+            env = make_env(cfg_path, N_MAX, M_MAX, verbose=False)
 
-        # Decay epsilon
-        if hasattr(agent, "epsilon"):
-            agent.epsilon = max(agent.epsilon * 0.99, 0.05)
+            if hasattr(agent, "q_net"):
+                agent.q_net.train()
 
-        # ---- Eval greedy (ε=0, không học) ----
-        eval_env = SimpleSplitSchedulingEnv(model_obj, True)
-        eval_agent = create_agent("dqn", state_dim, action_dim)
-        eval_agent.q_net.load_state_dict(agent.q_net.state_dict())
-        eval_agent.q_net.eval()
-        if hasattr(eval_agent, "epsilon"):
-            eval_agent.epsilon = 0.0
+            # Train (epsilon-greedy, learning enabled)
+            train_result = run_episode(env, agent, train=True)
+            tr = float(train_result["total_reward"])
+            train_rewards.append(tr)
+            # print(f"Ep {ep:04d} | Train cfg={os.path.basename(cfg_path)} | reward: {tr:.2f}")
 
-        eval_result = run_episode(eval_env, eval_agent, train=False)
-        er = float(eval_result["total_reward"])
-        eval_rewards.append(er)
-        print(f"          Eval  reward: {er:.2f}")
+            # Decay epsilon (if exists)
+            if hasattr(agent, "epsilon"):
+                agent.epsilon = max(agent.epsilon * 0.99, 0.05)
 
-        # ---- Model selection theo eval ----
-        if er > best_eval_reward:
-            best_eval_reward = er
-            torch.save(agent.q_net.state_dict(), model_save_path)
-            torch.save({
-                "state_dim": state_dim,
-                "action_dim": action_dim,
-                "model_state_dict": agent.q_net.state_dict(),
-            }, model_save_path)
-            print(f"📌 Saved BETTER (eval) model at Ep {ep}: eval={best_eval_reward:.2f} -> {model_save_path}")
+            # ---- Eval on K random cfgs (greedy, no learning) ----
+            if hasattr(agent, "q_net"):
+                agent.q_net.eval()
+            if hasattr(agent, "epsilon"):
+                old_eps = agent.epsilon
+                agent.epsilon = 0.0
 
-        # Hard update target (nếu agent có)
-        if hasattr(agent, "update_target_net"):
-            agent.update_target_net()
+            sample_cfgs = random.sample(list_datasets, k=min(eval_k, len(list_datasets)))
+            eval_sum = 0.0
+            with torch.no_grad():
+                for p in sample_cfgs:
+                    eval_env = make_env(p, N_MAX, M_MAX, verbose=False)
+                    # eval_agent = create_agent("dqn", state_dim, action_dim)
+                    # eval_agent.q_net.load_state_dict(agent.q_net.state_dict())
+                    # if hasattr(eval_agent, "epsilon"):
+                    #     eval_agent.epsilon = 0.0
+                    eval_result = run_episode(eval_env, agent, train=False)
+                    eval_sum += float(eval_result["total_reward"])
 
-    print(f"Training complete. Best EVAL reward: {best_eval_reward:.2f}. Model saved to {model_save_path}")
+            er = eval_sum / len(sample_cfgs)
+            eval_rewards.append(er)
+            # print(f"          Eval@{len(sample_cfgs)} cfgs avg reward: {er:.2f}")
+
+            # ---- Model selection ----
+            if er > best_eval_reward:
+                best_eval_reward = er
+                torch.save({
+                    "state_dim": state_dim,
+                    "action_dim": action_dim,
+                    "N_MAX": N_MAX,
+                    "M_MAX": M_MAX,
+                    "model_state_dict": agent.q_net.state_dict(),
+                }, model_save_path)
+                # print(f"📌 Saved BETTER model at Ep {ep}: eval_avg={best_eval_reward:.2f} -> {model_save_path}")
+
+            # restore epsilon
+            if hasattr(agent, "epsilon"):
+                agent.epsilon = old_eps if 'old_eps' in locals() else agent.epsilon
+
+            # target update (if implemented)
+            if hasattr(agent, "update_target_net"):
+                agent.update_target_net()
+
+    print(f"Training complete. Best EVAL(avg) reward: {best_eval_reward:.2f}. Model saved to {model_save_path}")
     return {"train_rewards": train_rewards, "eval_rewards": eval_rewards}
-
-if __name__ == "__main__":
-    cfg_path = os.path.join("datasets", "splittable_jobs.json")
-    stats = train_dqn(cfg_path, model_save_path="qnet.pt", episodes=500, seed=42)

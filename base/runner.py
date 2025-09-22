@@ -8,28 +8,20 @@ def to_tensor(x, dtype=torch.float32):
     return torch.as_tensor(x, dtype=dtype)
 
 def run_episode(env: SimpleSplitSchedulingEnv, agent: AgentBase, train: bool = True) -> Dict[str, Any]:
-    state = env.reset()
+    state, _ = env.reset()
     done = False
+    truncated = False
     total_reward = 0.0
 
-    # step cap: Using in testing version, to avoid endless loops
-    # can remove in future versions if needed
-    max_steps = getattr(env, "max_steps", env.num_jobs * env.num_machines * 50)
-    steps = 0
-
-    while not done and steps < max_steps:
+    while not (done or truncated):
         mask = env.valid_action_mask()
 
-        # chọn action index
         if hasattr(agent, "select_action"):
-            try:
-                action = agent.select_action(state, mask)
-            except RuntimeError as e:
-                print(f"RuntimeError: {e} in select_action.")
+            action = agent.select_action(state, mask)
         else:
             raise RuntimeError("Agent must implement select_action function.")
 
-        next_state, reward, done, info = env.step(action)
+        next_state, reward, done, truncated, info = env.step(action)
 
         if train and hasattr(agent, "add_transition"):
             agent.add_transition(
@@ -37,16 +29,15 @@ def run_episode(env: SimpleSplitSchedulingEnv, agent: AgentBase, train: bool = T
                 torch.as_tensor(action, dtype=torch.long),
                 float(reward),
                 to_tensor(next_state, torch.float32),
-                bool(done),
+                bool(done or truncated),
             )
         if train and hasattr(agent, "update"):
             agent.update()
 
         state = next_state
         total_reward += reward
-        steps += 1
 
     if train and hasattr(agent, "update_target_net"):
         agent.update_target_net()
 
-    return {"total_reward": total_reward, "job_assignments": getattr(env, "job_assignments", {})}
+    return {"total_reward": float(total_reward), "job_assignments": getattr(env, "job_assignments", {})}

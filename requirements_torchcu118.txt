@@ -1,0 +1,17 @@
+# GPU / PyTorch stack
+torch==2.0.1+cu118
+torchvision==0.15.2+cu118
+# torchaudio==2.0.2+cu118   # (tùy chọn, nếu bạn cần audio processing)
+
+# Scientific stack
+numpy==1.26.4
+pandas>=2.0,<3.0
+matplotlib>=3.7,<3.11
+
+# RL / Gym stack
+gym>=0.26.2,<0.27
+shimmy>=2.0
+stable-baselines3>=2.1.0,<3.0
+
+# Testing
+pytest>=8.0,<9.0

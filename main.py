@@ -25,6 +25,17 @@ from staticAlgos.GA import run_ga, GAParams
 # Helpers
 # ---------------------------
 
+def _as_cfg_list(arg_path: str):
+    if any(ch in arg_path for ch in ["*", "?", "["]):
+        return sorted(glob.glob(arg_path))
+    if os.path.isdir(arg_path):
+        return sorted(glob.glob(os.path.join(arg_path, "*.json")))
+    if arg_path.endswith(".txt") and os.path.isfile(arg_path):
+        # manifest: mỗi dòng 1 đường dẫn file json
+        with open(arg_path) as f:
+            return [ln.strip() for ln in f if ln.strip()]
+    return [arg_path]
+
 def compute_makespan_from_assignments(assignments):
     max_end = 0
     for a in assignments:
@@ -50,6 +61,92 @@ def print_assignments(assignments):
         finish = max((e for (_w, s, e) in segs), default=None)
         print(f"  Job {j}: Machine {m}, finish={finish}, segments={segs}")
 
+def normalize_dqn_assignments(job_assignments: dict) -> list:
+    """
+    Convert env.job_assignments (job -> machine -> [(start,end), ...])
+    thành list 'assignments' giống SA/GA:
+      { "job": j, "machine": m, "segments": [[0,start,end],...],
+        "timespan": finish - first_start, "finish": finish, "fragments": len(segments) }
+    """
+    assignments = []
+    for j, by_machine in job_assignments.items():
+        # chọn machine có finish lớn nhất (hoặc machine duy nhất)
+        best_m, segs = max(
+            ((m, segs) for m, segs in by_machine.items()),
+            key=lambda kv: (max(e for (s, e) in kv[1]) if kv[1] else -1)
+        )
+        if not segs:
+            continue
+        finish = max(e for (s, e) in segs)
+        first_start = min(s for (s, e) in segs)
+        entries = [[0, s, e] for (s, e) in segs]   # đặt win_idx=0 cho đồng nhất
+        assignments.append({
+            "job": j,
+            "machine": best_m,
+            "segments": entries,
+            "timespan": finish - first_start,
+            "finish": finish,
+            "fragments": len(segs),
+        })
+    # sắp xếp theo job cho dễ đọc
+    assignments.sort(key=lambda a: a["job"])
+    return assignments
+
+
+def final_windows_dict(env) -> dict:
+    """
+    Chuẩn hoá env.time_windows về dạng:
+      { "0": [[s,e], [s,e], ...], "1": [...], ... }
+    An toàn với nhiều biến thể cấu trúc để tránh TypeError.
+    """
+    out = {}
+    tw = getattr(env, "time_windows", None)
+
+    # helper: có phải là 1 cặp (s,e)?
+    def _is_pair(x):
+        return isinstance(x, (list, tuple)) and len(x) == 2 and all(isinstance(t, (int, float)) for t in x)
+
+    # helper: ép về [int(s), int(e)]
+    def _to_pair(x):
+        s, e = x
+        return [int(s), int(e)]
+
+    if tw is None:
+        return out
+
+    # Case A: dict {machine_idx: [(s,e), ...]}
+    if isinstance(tw, dict):
+        for k, wins in tw.items():
+            rows = []
+            if isinstance(wins, (list, tuple)):
+                for w in wins:
+                    if _is_pair(w):
+                        rows.append(_to_pair(w))
+                    # nếu lỡ là cặp đơn dạng tuple/list lồng sâu, có thể mở rộng thêm ở đây
+            out[str(k)] = rows
+        return out
+
+    # Case B: list/tuple theo index máy
+    if isinstance(tw, (list, tuple)):
+        for m, wins in enumerate(tw):
+            rows = []
+            if isinstance(wins, (list, tuple)):
+                # wins có thể là [(s,e), ...] hoặc là một cặp đơn (s,e)
+                if len(wins) > 0 and all(_is_pair(w) for w in wins):
+                    rows = [_to_pair(w) for w in wins]
+                elif _is_pair(wins):
+                    rows = [_to_pair(wins)]
+                else:
+                    # Không đúng format kỳ vọng → để rỗng
+                    rows = []
+            # Nếu wins là int/float → không tương thích → để rỗng
+            out[str(m)] = rows
+        return out
+
+    # Case khác (string, int, ...): để rỗng
+    return out
+
+
 def write_output_results(out_path: str, payload: dict):
     if not out_path:
         return
@@ -68,8 +165,8 @@ def main():
     # Common
     parser.add_argument("--mode", type=str, default=None,
                         help="one of: dqn, fcfs, sa, ga. If omitted, use env SCHEDULER_MODE or default 'dqn'.")
-    parser.add_argument("--config", type=str, default="./datasets/splittable_jobs.json",
-                        help="Path to JSON config containing 'model'")
+    parser.add_argument("--config", type=str, default="./datasets/20250609/",
+                            help="Path to JSON config OR folder OR glob pattern")
     parser.add_argument("--out", type=str, default="",
                         help="Optional path to write JSON result (assignments, makespan, etc.)")
     parser.add_argument("--split-mode", type=str, default="assign", choices=["timespan", "leftover", "assign"],
@@ -103,7 +200,7 @@ def main():
 
     cfg = None
     # Load config - common for all modes, except all_1/all_2
-    if args.mode not in ["all_1", "all_2"]:
+    if args.mode in ["fcfs", "sa", "ga"]:
         io_json_input_file_path = args.config
         cfg = ReadJsonIOHandler(io_json_input_file_path).get_input()
     # Mode resolution
@@ -113,29 +210,115 @@ def main():
 
     # ---------------- RL branch ----------------
     if mode == "dqn":
-        env = SimpleSplitSchedulingEnv(cfg)
-        agent_name = mode
-
+        cfg_list = _as_cfg_list(args.config)
         model_file_path = args.dqn_model
         enable_training = args.dqn_train
 
+        seed = args.config.split(os.sep)[1]
+
+        # Train nếu cần (multi-env đã hỗ trợ trong train_dqn)
         if enable_training or not os.path.isfile(model_file_path):
-            print("\nTraining DQN agent...")
-            train_dqn(io_json_input_file_path, model_save_path=model_file_path, episodes=args.dqn_episodes)
+            stat_path = os.path.join("metrics", mode, "training_time_statistic.json")
+            start_trainning_time = time.time()
+            train_dqn(cfg_list, model_save_path=os.path.basename(model_file_path),
+                    episodes=args.dqn_episodes)
+            trainning_time = (time.time() - start_trainning_time) * 1000.0
+            with open(stat_path, "r", encoding="utf-8") as f:
+                data_file = json.load(f)
+            key = os.path.basename(model_file_path)
+            data_file[key] = {
+                "trainning_time": trainning_time,
+                "size of data samples": len(cfg_list),
+                "algo" : mode
+            }
+            with open(stat_path, "w", encoding="utf-8") as f:
+                json.dump(data_file, f, ensure_ascii=False, indent=4)
+            return
 
-        print("\nLoading trained model and running final evaluation...")
-        agent = create_agent(agent_name, env.state_dim(), env.action_dim())
+        # Load checkpoint
+        print("\nLoading trained model and running batch evaluation...")
         ckpt = torch.load(model_file_path, map_location="cpu")
-        assert ckpt["state_dim"] == env.state_dim(), f"state_dim mismatch: {ckpt['state_dim']} vs {env.state_dim()}"
-        assert ckpt["action_dim"] == env.action_dim(), f"action_dim mismatch: {ckpt['action_dim']} vs {env.action_dim()}"
-        agent.q_net.load_state_dict(ckpt["model_state_dict"])
-        agent.q_net.eval()
-        if hasattr(agent, "epsilon"):
-            agent.epsilon = 0.0  # disable exploration for eval
+        state_dim_ck = ckpt["state_dim"]; action_dim_ck = ckpt["action_dim"]
+        N_MAX = ckpt.get("N_MAX", None); M_MAX = ckpt.get("M_MAX", None)
 
-        io = ReadJsonIOHandler(io_json_input_file_path)
-        result = run_episode(env, agent, train=False)
-        io.show_output(result)
+        # Agent “mẹ” để clone state_dict (tránh lặp init optimizer)
+        # Tạo env probe theo file đầu tiên để build agent đúng kích thước
+        probe_obj = ReadJsonIOHandler(cfg_list[0]).get_input()
+        probe_env = SimpleSplitSchedulingEnv(probe_obj, n_max=N_MAX, m_max=M_MAX)
+        assert probe_env.state_dim() == state_dim_ck and probe_env.action_dim() == action_dim_ck, \
+            f"Dim mismatch on probe env: ckpt({state_dim_ck},{action_dim_ck}) vs env({probe_env.state_dim()},{probe_env.action_dim()})"
+
+        mother_agent = create_agent("dqn", probe_env.state_dim(), probe_env.action_dim())
+        mother_agent.q_net.load_state_dict(ckpt["model_state_dict"])
+        mother_agent.q_net.eval()
+        if hasattr(mother_agent, "epsilon"):
+            mother_agent.epsilon = 0.0
+
+        # Thư mục xuất kết quả
+        out_folder = "metrics"
+        trained_model = os.path.basename(model_file_path).replace(".pt", "")
+
+        for file_config_test_sample in cfg_list:
+            t0 = time.time()
+
+            # Tạo env cho từng cfg (dùng N_MAX/M_MAX nếu có – theo Hướng B)
+            model_obj = ReadJsonIOHandler(file_config_test_sample).get_input()
+            env = SimpleSplitSchedulingEnv(model_obj, n_max=N_MAX, m_max=M_MAX)
+
+            # an toàn: khớp kích thước checkpoint
+            assert env.state_dim() == state_dim_ck and env.action_dim() == action_dim_ck, \
+                f"Dim mismatch on {os.path.basename(file_config_test_sample)}: ckpt({state_dim_ck},{action_dim_ck}) vs env({env.state_dim()},{env.action_dim()})"
+
+            # clone agent để eval greedy
+            agent = create_agent("dqn", env.state_dim(), env.action_dim())
+            agent.attach_env(env)
+            agent.q_net.load_state_dict(mother_agent.q_net.state_dict())
+            if hasattr(agent, "epsilon"):
+                agent.epsilon = 0.0
+
+            result = run_episode(env, agent, train=False)
+            runtime_ms = (time.time() - t0) * 1000.0
+
+            # Chuẩn hóa assignments sang format SA/GA
+            assignments = normalize_dqn_assignments(result.get("job_assignments", {}))
+            makespan = compute_makespan_from_assignments(assignments)
+
+            # Thử lấy lower_bound & split_mode nếu có
+            lower_bound = None
+            split_mode = getattr(env, "mode", "assign")
+            try:
+                lower_bound = model_obj.get_lower_bound()
+            except Exception:
+                pass
+
+            percentage_gap = None
+            if lower_bound:
+                try:
+                    percentage_gap = (makespan - lower_bound) * 100.0 / lower_bound
+                except ZeroDivisionError:
+                    percentage_gap = None
+
+            payload = {
+                "dataset": os.path.basename(file_config_test_sample),
+                "lower_bound": lower_bound,
+                "split_mode": split_mode,
+                # bạn có thể đổi key này hoặc bỏ đi; giữ nguyên “seed_used_on_sa_and_ga” = None cho đồng dạng
+                "seed_used_on_sa_and_ga": None,
+                "dqn_results": {
+                    "makespan": makespan,
+                    "assignments": assignments,
+                    "final_windows": final_windows_dict(env),
+                    "processing_time_milliseconds": runtime_ms,
+                    "percentage_gap": percentage_gap,
+                },
+            }
+
+            out_name = f"dqn_{os.path.basename(file_config_test_sample)}"
+            out_path = os.path.join(out_folder, seed, trained_model, out_name)
+            write_output_results(out_path, payload)
+
+        print(f"\nDone. Wrote {len(cfg_list)} files to: {out_folder}/{seed}/{trained_model}/dqn_<cfg>.json")
+
 
     # ---------------- Static algorithms ----------------
     if mode == "fcfs":
