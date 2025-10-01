@@ -27,11 +27,19 @@ for i in range(1, 11, 1):
     input_folder_1 = f"qnet_{i*9}"
     key_pattern = f"{input_folder_1}.pt"
     sum_percentage_gap = 0
-
-    for file in glob.glob(os.path.join("metrics", "test_90", input_folder_1, "*.json")):
+    arr = []
+    for file in glob.glob(os.path.join("metrics", "90", input_folder_1, "*.json")):
         with open(file, "r", encoding="utf-8") as f:
             data = json.load(f)
         sum_percentage_gap += data["dqn_results"]["percentage_gap"]
+        haha = data["dqn_results"]["percentage_gap"]
+        arr.append(haha)
+        # print(haha)
+        # if haha < 50:
+        #     print(file)
+    # print(f"\n\nfiles in {input_folder_1} has {arr}")
+    # print(arr)
+    print(f"\nfiles in {input_folder_1} has min_LB: {min(arr)}, max_LB: {max(arr)}\n\n")
     data_collection.append((10, i*9, data_stat[key_pattern]["trainning_time"], 90, sum_percentage_gap/90))
 
 save_rows_to_csv(data_collection)

@@ -36,6 +36,18 @@ class ReadJsonIOHandler(IOHandler):
             int(k): v for k, v in time_windows_raw.items()
         }
 
+        # --- Chuẩn hoá ---
+        processing_times = model_data["processing_times"]
+        max_job_size = max(processing_times) if processing_times else 1
+        max_timespan = model_data.get("total_processing_time", 1)
+
+        processing_times_norm = [p / max_job_size for p in processing_times]
+
+        time_windows_norm = {
+            m: [[s / max_timespan, e / max_timespan] for (s, e) in wins]
+            for m, wins in time_windows.items()
+        }
+
         return SchedulingModel(
             num_jobs=model_data["num_jobs"],
             num_machines=model_data["num_machines"],
@@ -45,7 +57,14 @@ class ReadJsonIOHandler(IOHandler):
             total_capacity_all_windows=model_data["total_capacity_all_windows"],
             lower_bound=model_data["lower_bound"],
             total_processing_time=model_data["total_processing_time"],
-            feasible=model_data["feasible"]
+            feasible=model_data["feasible"],
+            # >>> bổ sung thêm normalized values <<<
+            processing_times_norm=processing_times_norm,
+            split_min_norm=model_data["split_min"] / max_job_size,
+            time_windows_norm=time_windows_norm,
+            total_capacity_all_windows_norm=model_data["total_capacity_all_windows"] / max_timespan,
+            lower_bound_norm=model_data["lower_bound"] / max_timespan,
+            total_processing_time_norm=model_data["total_processing_time"] / max_timespan
         )
     
     def analyze_schedule(self, job_assignments: dict) -> dict:

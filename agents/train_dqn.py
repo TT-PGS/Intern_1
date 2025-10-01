@@ -42,7 +42,7 @@ def set_seed(seed: Optional[int] = None) -> None:
 
 def make_env(cfg_path: str, N_MAX: int, M_MAX: int, verbose: bool = False) -> SimpleSplitSchedulingEnv:
     model_obj = ReadJsonIOHandler(cfg_path).get_input()
-    return SimpleSplitSchedulingEnv(model_obj, mode="assign", verbose=verbose, n_max=N_MAX, m_max=M_MAX)
+    return SimpleSplitSchedulingEnv(model_obj, verbose=verbose, n_max=N_MAX, m_max=M_MAX)
 
 def train_dqn(
     model_config_paths: Union[str, List[str]],
@@ -51,14 +51,11 @@ def train_dqn(
     seed: int = 20250609,
     eval_k: int = 30,  # evaluate on K random cfgs
 ):
-    """
-    Multi-env DQN training with fixed (N_MAX, M_MAX) via padding+mask.
-    Each episode samples one cfg to build env but uses the SAME agent (fixed dims).
-    """
     set_seed(seed)
 
     cfg_files = as_cfg_list(model_config_paths)
-    list_datasets = as_cfg_list(os.path.join("datasets/90/"))
+    list_datasets = random.sample(cfg_files, episodes)
+    # print(f" list datasets: {list_datasets}")
     assert len(cfg_files) > 0, "No config files found."
     N_MAX, M_MAX = scan_caps(cfg_files)
 
@@ -66,7 +63,7 @@ def train_dqn(
     probe_env = make_env(cfg_files[0], N_MAX, M_MAX, verbose=False)
     state_dim, action_dim = probe_env.state_dim(), probe_env.action_dim()
     print(f"[train_dqn] Fixed dims with padding: state_dim={state_dim} action_dim={action_dim} "
-          f"(N_MAX={N_MAX}, M_MAX={M_MAX}; cfgs={len(cfg_files)})")
+          f"(N_MAX={N_MAX}, M_MAX={M_MAX}; cfgs={len(cfg_files)}), training set: {len(list_datasets)} files")
 
     # Create shared agent with fixed dims
     agent = create_agent("dqn", state_dim, action_dim)
@@ -75,10 +72,10 @@ def train_dqn(
     train_rewards: List[float] = []
     eval_rewards: List[float] = []
 
-    for i in range(len(cfg_files)):
-        for ep in range(episodes):
+    for ep in range(1):
+        for cfg_path in list_datasets:
+        # for ep in range(episodes):
             # ---- sample one cfg for training episode ----
-            cfg_path = random.choice(list_datasets)
             env = make_env(cfg_path, N_MAX, M_MAX, verbose=False)
 
             if hasattr(agent, "q_net"):
@@ -106,10 +103,6 @@ def train_dqn(
             with torch.no_grad():
                 for p in sample_cfgs:
                     eval_env = make_env(p, N_MAX, M_MAX, verbose=False)
-                    # eval_agent = create_agent("dqn", state_dim, action_dim)
-                    # eval_agent.q_net.load_state_dict(agent.q_net.state_dict())
-                    # if hasattr(eval_agent, "epsilon"):
-                    #     eval_agent.epsilon = 0.0
                     eval_result = run_episode(eval_env, agent, train=False)
                     eval_sum += float(eval_result["total_reward"])
 

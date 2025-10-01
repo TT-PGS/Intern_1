@@ -1,26 +1,29 @@
 #!/bin/bash
 
+TRAINING_TESTING_DATASET="datasets/90/"
+
 #============================= training model ============================
-python -m main --mode dqn --config "datasets/9" --dqn-train --dqn-episodes 5 --dqn-model qnet_9.pt
-python -m main --mode dqn --config "datasets/18" --dqn-train --dqn-episodes 5 --dqn-model qnet_18.pt
-python -m main --mode dqn --config "datasets/27" --dqn-train --dqn-episodes 5 --dqn-model qnet_27.pt
-python -m main --mode dqn --config "datasets/36" --dqn-train --dqn-episodes 5 --dqn-model qnet_36.pt
-python -m main --mode dqn --config "datasets/45" --dqn-train --dqn-episodes 5 --dqn-model qnet_45.pt
-python -m main --mode dqn --config "datasets/54" --dqn-train --dqn-episodes 5 --dqn-model qnet_54.pt
-python -m main --mode dqn --config "datasets/63" --dqn-train --dqn-episodes 5 --dqn-model qnet_63.pt
-python -m main --mode dqn --config "datasets/72" --dqn-train --dqn-episodes 5 --dqn-model qnet_72.pt
-python -m main --mode dqn --config "datasets/81" --dqn-train --dqn-episodes 5 --dqn-model qnet_81.pt
-python -m main --mode dqn --config "datasets/90" --dqn-train --dqn-episodes 5 --dqn-model qnet_90.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 9 --dqn-model qnet_9.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 18 --dqn-model qnet_18.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 27 --dqn-model qnet_27.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 36 --dqn-model qnet_36.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 45 --dqn-model qnet_45.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 54 --dqn-model qnet_54.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 63 --dqn-model qnet_63.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 72 --dqn-model qnet_72.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 81 --dqn-model qnet_81.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-train --dqn-episodes 90 --dqn-model qnet_90.pt
 #============================= applied trained models ====================
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_9.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_18.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_27.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_36.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_45.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_54.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_63.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_72.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_81.pt
-python -m main --mode dqn --config "datasets/test_90/" --dqn-model qnet_90.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_9.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_18.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_27.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_36.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_45.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_54.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_63.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_72.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_81.pt
+python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_90.pt
 #============================= collect data ==============================
 python ./metrics/dqn_evaluator_tableII.py
+python draw_gantt.py

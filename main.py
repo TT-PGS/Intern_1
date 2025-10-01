@@ -271,7 +271,6 @@ def main():
 
             # clone agent để eval greedy
             agent = create_agent("dqn", env.state_dim(), env.action_dim())
-            agent.attach_env(env)
             agent.q_net.load_state_dict(mother_agent.q_net.state_dict())
             if hasattr(agent, "epsilon"):
                 agent.epsilon = 0.0
@@ -302,7 +301,6 @@ def main():
                 "dataset": os.path.basename(file_config_test_sample),
                 "lower_bound": lower_bound,
                 "split_mode": split_mode,
-                # bạn có thể đổi key này hoặc bỏ đi; giữ nguyên “seed_used_on_sa_and_ga” = None cho đồng dạng
                 "seed_used_on_sa_and_ga": None,
                 "dqn_results": {
                     "makespan": makespan,
