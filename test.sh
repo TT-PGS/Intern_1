@@ -27,3 +27,5 @@ python -m main --mode dqn --config ${TRAINING_TESTING_DATASET} --dqn-model qnet_
 #============================= collect data ==============================
 python ./metrics/dqn_evaluator_tableII.py
 python draw_gantt.py
+
+rm envs.log trace_steps.jsonl runner.log

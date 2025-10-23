@@ -35,7 +35,7 @@ for i in range(1, 11, 1):
         haha = data["dqn_results"]["percentage_gap"]
         arr.append(haha)
         # print(haha)
-        # if haha < 50:
+        # if haha > 50:
         #     print(file)
     # print(f"\n\nfiles in {input_folder_1} has {arr}")
     # print(arr)

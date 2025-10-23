@@ -217,3 +217,13 @@ ga_demo_log.jsonl
 datasets/**/*.json
 metrics/**/*.json
 results_*.json
+qnet_9.pt
+qnet_18.pt
+qnet_27.pt
+qnet_36.pt
+qnet_45.pt
+qnet_54.pt
+qnet_63.pt
+qnet_72.pt
+qnet_81.pt
+qnet_90.pt

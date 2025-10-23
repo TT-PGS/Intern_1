@@ -1,8 +1,11 @@
 import gymnasium as gym
 import numpy as np
+
+from envs.common_debug import check_window
+import json, time, math
+
 from typing import Tuple, Optional
-import math
-from logs.log import write_log
+from logs.log import write_log, write_jsonl
 
 from base.model import SchedulingModel
 from split_job.dp_single_job import (
@@ -10,6 +13,48 @@ from split_job.dp_single_job import (
     solve_feasible_leftover_rule_cfg,
     assign_job_to_machine,
 )
+
+def debug_list_windows(j, windows_by_m, ready_time_j, split_min,
+                       job_bound_machine, makespan_now, estimate_ect_fn,
+                       file_obj=None):
+    seen = []
+    for m, wins in windows_by_m.items():
+        for widx, w in enumerate(wins):
+            seen.append(check_window(
+                j, m, widx, w, ready_time_j, split_min,
+                job_bound_machine, makespan_now, estimate_ect_fn
+            ))
+    # Tổng hợp theo máy
+    per_m = {}
+    for r in seen:
+        per_m.setdefault(r.m, []).append(r)
+
+    # Ghi ra JSON 1 dòng để dễ grep theo thời gian
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    out = {
+        "ts": stamp,
+        "phase": "pre_action_mask",
+        "job": int(j),
+        "ready": float(ready_time_j),
+        "split_min": float(split_min),
+        "machines": {}
+    }
+    for m, arr in per_m.items():
+        out["machines"][int(m)] = [{
+            "widx": r.widx,
+            "raw": list(r.raw),
+            "aligned_start": r.aligned_start,
+            "residual": r.residual,
+            "feasible": r.feasible,
+            "reasons": r.reasons,
+            "ect": r.ect
+        } for r in arr]
+    line = json.dumps(out, ensure_ascii=False)
+    if file_obj: 
+        file_obj.write(line+"\n"); file_obj.flush()
+    else:
+        print(line)
+    return per_m
 
 class SimpleSplitSchedulingEnv(gym.Env):
     """
@@ -25,18 +70,18 @@ class SimpleSplitSchedulingEnv(gym.Env):
         self,
         model: SchedulingModel,
         mode: str = "assign",
-        verbose: bool = False,
+        verbose: bool = True,
         n_max: int = 50,
         m_max: int = 4,
         w_max: int = 24,
         time_scale: Optional[float] = None,
         max_job_size: Optional[float] = 24,
         alpha: float = 0.15,
-        beta: float = 4,
+        beta: float = 0,
         lam: float = 15,
-        radius_ratio: float = 0.5,
+        radius_ratio: float = 0.0,
         radius_min: float = 0,
-        topK: Optional[int] = 3,
+        topK: Optional[int] = 5,
     ):
         super().__init__()
 
@@ -317,24 +362,60 @@ class SimpleSplitSchedulingEnv(gym.Env):
                 cap += (seg // self.split_min) * self.split_min
         return cap
 
+    def _get_ready_time(self, j: int) -> float:
+        """Trả về thời điểm job j sẵn sàng (nếu có field), ngược lại 0."""
+        for name in ["ready_time", "ready_times", "job_ready_time", "job_ready_times", "earliest_start"]:
+            val = getattr(self, name, None)
+            if val is not None:
+                try:
+                    return float(val[j])
+                except Exception:
+                    pass
+        return 0.0
+
+    def _debug_mask_windows(self, job_id: int, ws_sorted, mask, phase: str):
+        """Ghi log debug cho windows được xét khi build mask."""
+        import json, time
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        record = {
+            "ts": ts,
+            "phase": phase,
+            "job": int(job_id),
+            "current_cmax": float(self.current_makespan),
+            "split_min": float(self.split_min),
+            "machines": {},
+        }
+        for m, ws in ws_sorted.items():
+            L = min(len(ws), self.W_MAX)
+            arr = []
+            for w in range(L):
+                s, e = ws[w]
+                arr.append({
+                    "w": w,
+                    "start": float(s),
+                    "end": float(e),
+                    "dur": float(e - s),
+                    "mask_on": bool(mask[job_id, m, w])
+                })
+            record["machines"][int(m)] = arr
+        with open("trace_mask.jsonl", "a") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+
     def valid_action_mask(self) -> np.ndarray:
         """
-        Mask (flatten N_MAX*M_MAX*W_MAX) ưu tiên earliest window theo tự điển:
-        - earliest_win_start[m] lấy từ mảng đã maintain.
-        - Với mỗi (j,m), nếu còn rem và máy có earliest, bật đúng window w
-        có start khớp earliest (trong tolerance) và đủ dài >= need.
-        - Fallback: nếu không có lựa chọn nào, bật tất cả cửa sổ khả thi.
+        Mask (flatten N_MAX*M_MAX*W_MAX):
+        - Bật top-K cửa sổ earliest hợp lệ mỗi máy (độ dài ≥ split_min)
+        - Ưu tiên các cửa sổ có end <= current Cmax
+        - Nếu job đã bind máy -> chỉ bật trên máy đó
         """
-
         eps = 1e-9
         mask = np.zeros((self.N_MAX, self.M_MAX, self.W_MAX), dtype=bool)
+        ws_sorted = {m: sorted(self.time_windows[m], key=lambda x: x[0])
+                     for m in range(self.real_num_machines)}
 
-        # chuẩn bị windows sort sẵn
-        ws_sorted = {
-            m: sorted(self.time_windows[m], key=lambda x: x[0])
-            for m in range(self.real_num_machines)
-        }
-
+        H = max(self.current_makespan, self.lower_bound, 1.0)
+        tol = 1e-6
+        K = getattr(self, "topK", 3) or 1
         any_set = False
 
         for j in range(self.real_num_jobs):
@@ -343,30 +424,38 @@ class SimpleSplitSchedulingEnv(gym.Env):
                 continue
             need = min(float(self.split_min), rem)
 
+            # nếu job đã có máy => chỉ xét máy đó
+            bound_m = None
+            jm = self.job_assignments.get(j, {})
+            if jm:
+                for m, segs in jm.items():
+                    if segs:
+                        bound_m = m
+                        break
+
             for m in range(self.real_num_machines):
-                est = self.earliest_win_start[m]
-                if est is None:
-                    continue  # máy này chưa có cửa sổ đủ dài
+                if bound_m is not None and m != bound_m:
+                    continue
 
                 ws = ws_sorted[m]
                 L = min(len(ws), self.W_MAX)
-                chosen_w = None
+                if L == 0:
+                    continue
 
-                # chọn đúng cửa sổ có start ~ earliest
-                for w in range(L):
-                    s, e = ws[w]
-                    if abs(s - est) <= self._tol and (e - s) + eps >= need:
-                        # (tuỳ chọn) chặn lại các action từng fail nếu bạn có self._blocked_actions
-                        if hasattr(self, "_blocked_actions") and (j, m, w) in self._blocked_actions:
-                            continue
-                        chosen_w = w
-                        break
+                # lọc cửa sổ đủ dài
+                cands = [(w, s, e) for w, (s, e) in enumerate(ws[:L])
+                         if (e - s) + eps >= need]
 
-                if chosen_w is not None:
-                    mask[j, m, chosen_w] = True
+                # chia 2 pha: end ≤ Cmax, end > Cmax
+                phase1 = [(w, s, e) for (w, s, e) in cands if e <= self.current_makespan + tol]
+                phase2 = [(w, s, e) for (w, s, e) in cands if e > self.current_makespan + tol]
+
+                chosen = (phase1[:K] if phase1 else phase2[:K])
+                for (w, s, e) in chosen:
+                    mask[j, m, w] = True
                     any_set = True
 
-        # Fallback: nếu hoàn toàn rỗng, bật tất cả cửa sổ khả thi
+        # fallback: nếu không set gì, bật tất cả cửa sổ đủ dài
         if not any_set:
             for j in range(self.real_num_jobs):
                 rem = float(self.jobs_remaining[j])
@@ -375,13 +464,17 @@ class SimpleSplitSchedulingEnv(gym.Env):
                 need = min(float(self.split_min), rem)
                 for m in range(self.real_num_machines):
                     ws = ws_sorted[m]
-                    L = min(len(ws), self.W_MAX)
-                    for w in range(L):
-                        s, e = ws[w]
+                    for w, (s, e) in enumerate(ws[:self.W_MAX]):
                         if (e - s) + eps >= need:
-                            if hasattr(self, "_blocked_actions") and (j, m, w) in getattr(self, "_blocked_actions", set()):
-                                continue
                             mask[j, m, w] = True
+
+        # --- debug log ---
+        if getattr(self, "verbose", False):
+            try:
+                for j in range(self.real_num_jobs):
+                    self._debug_mask_windows(j, ws_sorted, mask, phase="valid_mask")
+            except Exception as ex:
+                write_log(f"[debug_mask] error: {ex}", "envs.log")
 
         return mask.reshape(-1)
 
@@ -410,24 +503,37 @@ class SimpleSplitSchedulingEnv(gym.Env):
         self._refresh_earliest_starts(machine_id)
 
     # ----------------- Transition -----------------
-    def step(self, action: int):        
+    def step(self, action: int):
         job_id, machine_id, window_id = self.decode_action(action)
+        current_total_gap = sum(self.machines_finish)
+        # === trace in ===
+        if self.verbose:
+            import json
+            rec0 = {
+                "tag": "env_step_in",
+                "choose": {"j": int(job_id), "m": int(machine_id), "w": int(window_id)},
+                "jobs_remaining_sum": float(sum(self.jobs_remaining)),
+                "jobs_remaining_j": float(self.jobs_remaining[job_id]) if job_id < self.real_num_jobs else None,
+                "machine_windows_len": int(len(self.time_windows[machine_id])) if machine_id < self.real_num_machines else None
+            }
+            write_jsonl(json.dumps(rec0, ensure_ascii=False), "trace_steps.jsonl")
 
-        windows = self.time_windows[machine_id]
+        # === validate action ===
+        windows = self.time_windows[machine_id] if machine_id < self.real_num_machines else []
         if (
             job_id >= self.real_num_jobs
             or machine_id >= self.real_num_machines
             or self.jobs_remaining[job_id] <= 0
             or window_id >= min(self.W_MAX, len(windows))
         ):
-            return self._pad_observation(), -10, self.done, False, {"invalid_action": True}
-        
+            if self.verbose:
+                write_jsonl({"tag": "env_step_out", "reason": "invalid_action"}, "trace_steps.jsonl")
+            return self._pad_observation(), -10.0, self.done, False, {"invalid_action": True}
+
         remaining_time = self.jobs_remaining[job_id]
         windows_subset = windows[window_id:]
 
-        # write_log(f"[choose] j={job_id} m={machine_id} w={window_id} "
-        #         f"rem={remaining_time} windows_len={len(windows)}", "envs.log")
-
+        # === plan chunks ===
         if self.mode == "timespan":
             finish_time, chunks = solve_min_timespan_cfg(remaining_time, windows_subset, self.split_min)
         elif self.mode == "leftover":
@@ -435,93 +541,149 @@ class SimpleSplitSchedulingEnv(gym.Env):
         else:
             finish_time, chunks = assign_job_to_machine(remaining_time, windows_subset, self.split_min)
 
-        # write_log(f"[plan] finish={finish_time} chunks={chunks}", "envs.log")
-
         if not chunks:
+            if self.verbose:
+                write_jsonl({"tag": "env_step_out", "reason": "infeasible_no_chunks"}, "trace_steps.jsonl")
             return self._pad_observation(), -10.0, False, False, {"infeasible": True}
 
+        # dùng chunk đầu tiên (như hiện tại)
         _, start, end = chunks[0]
         served = float(end - start)
         if served <= 0.0:
+            if self.verbose:
+                write_jsonl({"tag": "env_step_out", "reason": "zero_chunk"}, "trace_steps.jsonl")
             return self._pad_observation(), -10.0, False, False, {"zero_chunk": True}
 
-        # finish_time = max(e for _, _, e in chunks)
-
         if finish_time is None:
-            return self._pad_observation(), -10, self.done, False, {"infeasible": True}
+            if self.verbose:
+                write_jsonl({"tag": "env_step_out", "reason": "finish_time_none"}, "trace_steps.jsonl")
+            return self._pad_observation(), -10.0, self.done, False, {"infeasible": True}
 
+        write_log(
+        f"[update] machine_windows: {self.machines_finish}, j{job_id} m{machine_id} served={served}",
+            "machine_windows.log"
+        )
+
+        # === snapshot trước khi cập nhật để tính reward ===
         prev_sum = float(sum(self.jobs_remaining))
         old_cmax = float(max(self.machines_finish[:self.real_num_machines], default=0.0))
-        old_var = float(np.var(self.machines_finish[:self.real_num_machines])) if self.real_num_machines > 0 else 0.0
         prev_finish_m = self.machines_finish[machine_id]
 
-        delta_fragments = 1
-        segs = self.job_assignments.get(job_id, {}).get(machine_id, [])
-        if segs:
-            if any(abs(prev_end - start) < 1e-6 for (_, prev_end) in segs):
-                delta_fragments = 0
-
-        # apply chunks
+        # === ghi nhận phân công & cập nhật windows/state ===
         self.job_assignments.setdefault(job_id, {}).setdefault(machine_id, []).append((start, end))
         self._update_windows(machine_id, start, end)
-
-        # Giảm phần còn lại của job theo chunk đã phục vụ
         self.jobs_remaining[job_id] = max(0.0, self.jobs_remaining[job_id] - served)
         self.machines_finish[machine_id] = max(prev_finish_m, end)
 
-        write_log(f"[update] j{job_id} m{machine_id} served={served} win_m{machine_id}={self.time_windows[machine_id]}", "envs.log")
+        write_log(
+            f"[update] j{job_id} m{machine_id} served={served} win_m{machine_id}={self.time_windows[machine_id]}",
+            "envs.log"
+        )
 
-        # reward = -Δmakespan
+        # === tiến triển? (giảm khối lượng hoặc tăng cmax) ===
         new_makespan = float(max(self.machines_finish[:self.real_num_machines], default=0.0))
         new_sum = float(sum(self.jobs_remaining))
         progress = (abs(new_sum - prev_sum) > 1e-6) or (new_makespan > old_cmax + 1e-6)
-        new_var = float(np.var(self.machines_finish[:self.real_num_machines])) if self.real_num_machines > 0 else 0.0
-
         if not progress:
             return self._pad_observation(), -1.0, False, False, {"noprog": True}
 
         self.current_makespan = new_makespan
 
-        over_lb = max(0.0, new_makespan - self.lower_bound)
-        
-        eta = 0.5
-
+        # === chuẩn hóa đơn giản theo mốc H để ổn định thang đo ===
         H = 0.0
         for m in range(self.real_num_machines):
             if self.time_windows[m]:
                 H = max(H, max(e for (s, e) in self.time_windows[m]))
         H = max(H, self.current_makespan, self.lower_bound, 1.0)
 
-        delta_cmax = (new_makespan - old_cmax) / H
-        over_lb = max(0.0, new_makespan - self.lower_bound) / H
-        new_var = new_var / (H*H)
-        served_norm = served / H
+        # 1) phần thưởng chính: âm của mức tăng Cmax (tăng càng ít càng tốt)
+        delta_cmax_norm = (new_makespan - old_cmax) / H
+        reward = - float(delta_cmax_norm)
 
-        rho = 0.5   # bonus hệ số cho chunk served
+        if self.current_makespan != 0:
+            total_gap = (sum(self.machines_finish) - current_total_gap)
+            total_gap_norm = np.clip(total_gap / (sum(self.machines_finish) + 1e-6), 1e-6, 10)
+        reward = reward + total_gap_norm
 
-        reward = (
-            -delta_cmax
-            - self.alpha * over_lb
-            - self.beta * float(delta_fragments)
-            - eta * new_var
-            + rho * served_norm
+        write_log(
+            f"[reward_dbg] ΔC={delta_cmax_norm:.4f}, gap={total_gap_norm:.4f}, "
+            f"reward={reward:.4f}",
+            "rewards.log"
         )
 
-        # reward scale nhỏ nên clip [-1, 1] để giữ tín hiệu
-        reward = float(np.clip(reward, -1.0, 1.0))
+        # 2) phạt rất nặng nếu job này đã/đang nằm trên nhiều máy khác nhau
+        #    (không quan tâm số đoạn miễn là CÙNG 1 máy)
+        assigned_machines = [m for m in self.job_assignments.get(job_id, {}).keys() if self.job_assignments[job_id].get(m)]
+        # nếu đã có ít nhất 1 máy khác với machine_id hiện tại
+        cross_penalty = getattr(self, "cross_penalty", 5.0)  # cho phép chỉnh từ ngoài
+        if any(m != machine_id for m in assigned_machines[:-1]):  # máy khác ngoài máy hiện tại
+            reward = -abs(float(cross_penalty))  # phạt cực nặng
+            if self.verbose:
+                import json
+                write_jsonl(json.dumps({
+                    "tag": "env_step_out",
+                    "reason": "cross_machine_violation",
+                    "job": int(job_id),
+                    "machines": assigned_machines,
+                    "reward": float(reward)
+                }, ensure_ascii=False), "trace_steps.jsonl")
+            return self._pad_observation(), float(reward), False, False, {"cross_machine_violation": True}
 
-        # write_log(f"[env] jobs_sum={sum(self.jobs_remaining):.3f} old_cmax={old_cmax:.2f} new_cmax={new_makespan:.2f} "
-        #         f"chunks_len={len(chunks) if chunks else 0} windows_m{machine_id}={len(self.time_windows[machine_id])}", "envs.log")
 
-        # done?
+        write_log(
+            f"[update] current_total_gap: {current_total_gap} total_gap: {total_gap}",
+            "envs.log"
+        )
+
+        # === trace out ===
+        if self.verbose:
+            import json
+            plan_rec = {
+                "tag": "plan",
+                "served": float(served),
+                "chunk": {"start": float(start), "end": float(end)},
+                "windows_after_m": int(machine_id),
+                "windows_after": [(float(s), float(e)) for (s, e) in self.time_windows[machine_id]],
+            }
+            write_jsonl(json.dumps(plan_rec, ensure_ascii=False), "trace_steps.jsonl")
+
+            out_rec = {
+                "tag": "env_step_out",
+                "H": H,
+                "reward": float(reward),
+                "reward_parts": {
+                    "delta_cmax_norm": float(delta_cmax_norm),
+                    "cross_machine": int(any(m != machine_id for m in assigned_machines[:-1]))
+                },
+                "cmax": float(new_makespan),
+                "machines_finish": [float(x) for x in self.machines_finish[:self.real_num_machines]],
+                "jobs_remaining_sum": float(sum(self.jobs_remaining)),
+            }
+            write_jsonl(json.dumps(out_rec, ensure_ascii=False), "trace_steps.jsonl")
+
+        # scale/clipping: giữ tín hiệu phạt nặng
+        reward = float(np.clip(reward, -10.0, 1.0))
+
+        # === done? ===
         if all(t <= 0 for t in self.jobs_remaining):
             self.done = True
-            gap = np.clip((new_makespan-self.lower_bound)/self.lower_bound, 0, 1.0)
-            reward += -float(self.lam) * float(gap)
-            reward = float(np.clip(reward, -50, 5))
+            # nhân reward với timespan cuối cùng để nhấn mạnh Cmax
+            final_time_span = max(1.0, float(self.current_makespan))
+            reward = float(reward * final_time_span)
+
+            # chuẩn hóa nếu cần (giữ trong [-50, 50] để tránh overflow)
+            reward = float(np.clip(reward, -50.0, 50.0))
+
+            if self.verbose:
+                write_jsonl({"tag": "env_done", "reason": "all_jobs_completed",
+                            "final_time_span": float(final_time_span),
+                            "final_reward": float(reward)}, "trace_steps.jsonl")
+
             return self._pad_observation(), float(reward), True, False, {}
 
         if not self.valid_action_mask().any():
+            if self.verbose:
+                write_jsonl({"tag": "env_done", "reason": "no_actions"}, "trace_steps.jsonl")
             return self._pad_observation(), float(reward), True, False, {"no_actions": True}
 
         return self._pad_observation(), float(reward), False, False, {}

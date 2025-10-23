@@ -3,6 +3,7 @@ from typing import List, Optional, Union
 import numpy as np
 import torch
 
+from logs.log import write_log, write_jsonl
 from agents.agent_factory import create_agent
 from envs.simple_split_env import SimpleSplitSchedulingEnv
 from base.io_handler import ReadJsonIOHandler
@@ -47,7 +48,7 @@ def make_env(cfg_path: str, N_MAX: int, M_MAX: int, verbose: bool = False) -> Si
 def train_dqn(
     model_config_paths: Union[str, List[str]],
     model_save_path: str = "qnet.pt",
-    episodes: int = 5000,
+    episodes: int = 9,
     seed: int = 20250609,
     eval_k: int = 30,  # evaluate on K random cfgs
 ):
@@ -66,69 +67,76 @@ def train_dqn(
           f"(N_MAX={N_MAX}, M_MAX={M_MAX}; cfgs={len(cfg_files)}), training set: {len(list_datasets)} files")
 
     # Create shared agent with fixed dims
-    agent = create_agent("dqn", state_dim, action_dim)
+    agent = create_agent("dqn", state_dim, action_dim, debug=False)
+    if hasattr(agent, "debug"):
+        agent.debug = True
 
     best_eval_reward = float("-inf")
     train_rewards: List[float] = []
     eval_rewards: List[float] = []
 
-    for ep in range(1):
-        for cfg_path in list_datasets:
+    for ep in range(50):
+        # for cfg_path in list_datasets:
         # for ep in range(episodes):
-            # ---- sample one cfg for training episode ----
-            env = make_env(cfg_path, N_MAX, M_MAX, verbose=False)
+        # ---- sample one cfg for training episode ----
+        cfg_path = random.choice(list_datasets)
+        env = make_env(cfg_path, N_MAX, M_MAX, verbose=False)
 
-            if hasattr(agent, "q_net"):
-                agent.q_net.train()
+        if hasattr(agent, "q_net"):
+            agent.q_net.train()
 
-            # Train (epsilon-greedy, learning enabled)
-            train_result = run_episode(env, agent, train=True)
-            tr = float(train_result["total_reward"])
-            train_rewards.append(tr)
-            # print(f"Ep {ep:04d} | Train cfg={os.path.basename(cfg_path)} | reward: {tr:.2f}")
+        write_jsonl({"tag":"episode_begin","cfg":"{os.path.basename(cfg_path)}"}, "trace_steps.jsonl")
+        train_result = run_episode(env, agent, train=True)
+        write_jsonl({"tag":"episode_end","total_reward":float(train_result["total_reward"])}, "trace_steps.jsonl")
 
-            # Decay epsilon (if exists)
-            if hasattr(agent, "epsilon"):
-                agent.epsilon = max(agent.epsilon * 0.99, 0.05)
+        # Train (epsilon-greedy, learning enabled)
+        train_result = run_episode(env, agent, train=True)
+        tr = float(train_result["total_reward"])
+        train_rewards.append(tr)
+        # print(f"Ep {ep:04d} | Train cfg={os.path.basename(cfg_path)} | reward: {tr:.2f}")
 
-            # ---- Eval on K random cfgs (greedy, no learning) ----
-            if hasattr(agent, "q_net"):
-                agent.q_net.eval()
-            if hasattr(agent, "epsilon"):
-                old_eps = agent.epsilon
-                agent.epsilon = 0.0
+        # Decay epsilon (if exists)
+        if hasattr(agent, "epsilon"):
+            agent.epsilon = max(agent.epsilon * 0.99, 0.05)
 
-            sample_cfgs = random.sample(list_datasets, k=min(eval_k, len(list_datasets)))
-            eval_sum = 0.0
-            with torch.no_grad():
-                for p in sample_cfgs:
-                    eval_env = make_env(p, N_MAX, M_MAX, verbose=False)
-                    eval_result = run_episode(eval_env, agent, train=False)
-                    eval_sum += float(eval_result["total_reward"])
+        # ---- Eval on K random cfgs (greedy, no learning) ----
+        if hasattr(agent, "q_net"):
+            agent.q_net.eval()
+        if hasattr(agent, "epsilon"):
+            old_eps = agent.epsilon
+            agent.epsilon = 0.0
 
-            er = eval_sum / len(sample_cfgs)
-            eval_rewards.append(er)
-            # print(f"          Eval@{len(sample_cfgs)} cfgs avg reward: {er:.2f}")
+        sample_cfgs = random.sample(list_datasets, k=min(eval_k, len(list_datasets)))
+        eval_sum = 0.0
+        with torch.no_grad():
+            for p in sample_cfgs:
+                eval_env = make_env(p, N_MAX, M_MAX, verbose=False)
+                eval_result = run_episode(eval_env, agent, train=False)
+                eval_sum += float(eval_result["total_reward"])
 
-            # ---- Model selection ----
-            if er > best_eval_reward:
-                best_eval_reward = er
-                torch.save({
-                    "state_dim": state_dim,
-                    "action_dim": action_dim,
-                    "N_MAX": N_MAX,
-                    "M_MAX": M_MAX,
-                    "model_state_dict": agent.q_net.state_dict(),
-                }, model_save_path)
-                # print(f"📌 Saved BETTER model at Ep {ep}: eval_avg={best_eval_reward:.2f} -> {model_save_path}")
+        er = eval_sum / len(sample_cfgs)
+        eval_rewards.append(er)
+        # print(f"          Eval@{len(sample_cfgs)} cfgs avg reward: {er:.2f}")
 
-            # restore epsilon
-            if hasattr(agent, "epsilon"):
-                agent.epsilon = old_eps if 'old_eps' in locals() else agent.epsilon
+        # ---- Model selection ----
+        if er > best_eval_reward:
+            best_eval_reward = er
+            torch.save({
+                "state_dim": state_dim,
+                "action_dim": action_dim,
+                "N_MAX": N_MAX,
+                "M_MAX": M_MAX,
+                "model_state_dict": agent.q_net.state_dict(),
+            }, model_save_path)
+            # print(f"📌 Saved BETTER model at Ep {ep}: eval_avg={best_eval_reward:.2f} -> {model_save_path}")
 
-            # target update (if implemented)
-            if hasattr(agent, "update_target_net"):
-                agent.update_target_net()
+        # restore epsilon
+        if hasattr(agent, "epsilon"):
+            agent.epsilon = old_eps if 'old_eps' in locals() else agent.epsilon
+
+        # target update (if implemented)
+        if hasattr(agent, "update_target_net"):
+            agent.update_target_net()
 
     print(f"Training complete. Best EVAL(avg) reward: {best_eval_reward:.2f}. Model saved to {model_save_path}")
     return {"train_rewards": train_rewards, "eval_rewards": eval_rewards}

@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from collections import namedtuple
-from logs.log import write_log
+from logs.log import write_log, write_jsonl
 
 from .q_net import QNet
 from .replay_buffer import ReplayBuffer
@@ -10,18 +10,27 @@ from base.agent_base import AgentBase
 
 Transition = namedtuple("Transition", ["state", "action", "reward", "next_state", "done"])
 
+import json
+def _j(obj):  # >>> DEBUG
+    try:
+        return json.dumps(obj, ensure_ascii=False)
+    except Exception as e:
+        return str(obj)
+
+
 class DQNAgent(AgentBase):
     def __init__(
         self,
         state_dim: int,
         action_dim: int,
-        lr: float = 1e-4,
+        lr: float = 1e-3,
         gamma: float = 0.99,
         epsilon: float = 1.0,
         buffer_size: int = 10000,
         batch_size: int = 64,
         target_update: str = "hard",
         # tau: float = 0.005,
+        debug = True
     ):
         self.action_dim = int(action_dim)
         self.gamma = float(gamma)
@@ -42,6 +51,9 @@ class DQNAgent(AgentBase):
         self.optimizer = torch.optim.Adam(self.q_net.parameters(), lr=lr)
         self.replay_buffer = ReplayBuffer(buffer_size)
 
+        self.debug = debug
+        self._trace_file = "trace_steps.jsonl"
+
     # --------------------------------------------------------------------- #
     #  Action selection: epsilon-greedy on Q(s,·) with optional action mask #
     # --------------------------------------------------------------------- #
@@ -56,12 +68,35 @@ class DQNAgent(AgentBase):
         else:
             print("there is cases when mask was None, invalid because action space is huge. Dangerous!!!")
 
+        # --- cast state
+        s = torch.as_tensor(state, dtype=torch.float32, device=self.device).view(1, -1)
+
+        # --- lấy V, A, Q để giải thích (không detach trước khi cần)
+        with torch.no_grad():
+            z = self.q_net.feature(s)               # (1, h2)
+            V = self.q_net.value_stream(z)          # (1, 1)
+            A = self.q_net.adv_stream(z)            # (1, A)
+            Q = V + (A - A.mean(dim=1, keepdim=True))  # (1, A)
+
+        q = Q.squeeze(0).detach().cpu().numpy()     # (A,)
+        v = float(V.item())
+        a_vec = A.squeeze(0).detach().cpu().numpy() # (A,)
+
+        # --- áp mask lên q để chọn action hợp lệ
+        q_eff = q.copy()
+        if mask is not None:
+            q_eff[~mask] = -1e9
+
+        took_random = False
         if np.random.rand() < float(self.epsilon):
             valid_idx = np.flatnonzero(mask)
             if len(valid_idx) == 0:
-                print(f"valid_idx: {valid_idx}")
-                return int(np.random.randint(self.action_dim))
-            action = int(np.random.choice(valid_idx))
+                action = int(np.random.randint(self.action_dim))
+            else:
+                action = int(np.random.choice(valid_idx))
+            took_random = True
+        else:
+            action = int(np.argmax(q_eff))
 
         s = torch.tensor(state, dtype=torch.float32, device=self.device).unsqueeze(0)
         q = self.q_net(s).squeeze(0).detach().cpu().numpy()
@@ -69,6 +104,25 @@ class DQNAgent(AgentBase):
         if mask is not None:
             q[~mask] = -1e9  # chặn invalid action
         action = int(q.argmax())
+
+        # --- >>> DEBUG: log top-k và lựa chọn
+        if self.debug:
+            k = min(5, self.action_dim)
+            topk_idx = np.argsort(-q_eff)[:k].tolist()
+            topk = [{"action_id": int(i), "q": float(q_eff[i])} for i in topk_idx]
+            rec = {
+                "tag": "agent_select",
+                "epsilon": float(self.epsilon),
+                "took_random": bool(took_random),
+                "V": v,
+                "A_mean": float(a_vec.mean()) if a_vec.size else 0.0,
+                "Q_chosen": float(q[action]),
+                "action_id": int(action),
+                "topk": topk,
+                "mask_valid_count": int(np.sum(mask)) if mask is not None else None,
+            }
+            write_jsonl(_j(rec), "trace_steps.jsonl")
+
         return action
 
     # ------------------------------------------------------------- #

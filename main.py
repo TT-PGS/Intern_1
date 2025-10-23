@@ -248,7 +248,7 @@ def main():
         assert probe_env.state_dim() == state_dim_ck and probe_env.action_dim() == action_dim_ck, \
             f"Dim mismatch on probe env: ckpt({state_dim_ck},{action_dim_ck}) vs env({probe_env.state_dim()},{probe_env.action_dim()})"
 
-        mother_agent = create_agent("dqn", probe_env.state_dim(), probe_env.action_dim())
+        mother_agent = create_agent("dqn", probe_env.state_dim(), probe_env.action_dim(), debug=False)
         mother_agent.q_net.load_state_dict(ckpt["model_state_dict"])
         mother_agent.q_net.eval()
         if hasattr(mother_agent, "epsilon"):
@@ -270,7 +270,7 @@ def main():
                 f"Dim mismatch on {os.path.basename(file_config_test_sample)}: ckpt({state_dim_ck},{action_dim_ck}) vs env({env.state_dim()},{env.action_dim()})"
 
             # clone agent để eval greedy
-            agent = create_agent("dqn", env.state_dim(), env.action_dim())
+            agent = create_agent("dqn", env.state_dim(), env.action_dim(), debug=False)
             agent.q_net.load_state_dict(mother_agent.q_net.state_dict())
             if hasattr(agent, "epsilon"):
                 agent.epsilon = 0.0
